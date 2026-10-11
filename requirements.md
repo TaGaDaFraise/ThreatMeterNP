@@ -10,11 +10,13 @@ the current name throughout, including in sections describing work done before t
 keep the document internally consistent — the `ThreatWatch` name only still appears literally
 where it's specifically about the rename itself (§13) or the SavedVariables migration code.
 
-**Status**: v1 (§1-§12) and v2 (§13) both shipped and validated in-game — options panel,
-minimap button, slash command, SavedVariables persistence, and class coloring all confirmed
-working. Icon replaced by the user (2026-09-20) and license chosen (MIT, copyright "Tag" — see
-[LICENSE](LICENSE)). Remaining open items (multi-client TOC, CurseForge packaging) are
-pre-release polish, not functional gaps.
+**Status**: **v1.0 released** (`.toc` `## Version: 1.0`, flagged as the first stable release
+per the user's request after v0.9.8's background-width fix). All v1 (§1-§12) and v2 (§13)
+feature work shipped and validated in-game — options panel, minimap button, slash command,
+SavedVariables persistence, and class coloring all confirmed working. Icon replaced by the
+user (2026-09-20) and license chosen (MIT, copyright "Tag" — see [LICENSE](LICENSE)).
+Remaining open items (multi-client TOC, CurseForge packaging) are post-1.0 polish, not
+functional gaps.
 
 ## Current state (read this first — orientation after context loss)
 
@@ -22,19 +24,30 @@ Everything below this section is the decision-by-decision history of how ThreatM
 (kept for "why" questions). This section is a current-as-of-last-edit snapshot so work can
 resume without reading all of it.
 
-**Version**: 0.9.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.0 (first stable release). Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
-ThreatMeterNP at this version (see §13).
+ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
+`~= false` rather than truthiness, specifically so they default to "on" for existing profiles
+that predate the setting, since AceDB doesn't retroactively backfill a brand-new nested key
+into an already-populated sub-table. Single-display threat text now explicitly calls `:Show()`
+on success (§13 v0.9.6) — a regression from the v0.8.0 background refactor meant it never
+became visible when list mode was off. Player list rows now color the name by the threat
+(tanking/not-tanking) color whenever "Color name by class" is off, instead of plain white
+(§13 v0.9.7). The player-list background now spans the widest rendered row rather than just
+the first/last row's width, fixing overlap with "Lower row size" set below 100% (§13 v0.9.8).
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
   optionally colored by that target's class (checkbox, players only — falls back to a plain
-  configured color for NPCs or when the checkbox is off).
+  configured color for NPCs or when the checkbox is off). A separate **"Show Target of
+  target"** toggle (`targetOfTarget.enabled`, default on) turns the whole label off entirely.
 - **Text alignment** (both labels, `align`: Left/Middle/Right, default Middle): which edge of
   the text sits at the configured X/Y offset — doubles as the anchor point (`SetPoint`) and the
   multi-line justification (`SetJustifyH`, relevant for the threat player list's rows), since
   "LEFT"/"CENTER"/"RIGHT" are valid values for both.
-- **Threat**, one of two modes (toggle in options, `listMode`):
+- **Threat**, with its own **"Show Threat"** toggle (`threat.enabled`, default on) that turns
+  the whole label off entirely — same on/off pattern as target-of-target's, added right after
+  it on request. One of two modes (toggle in options, `listMode`) when enabled:
   - **Single** (default): the player's own threat on that unit, in a configurable format —
     Numeric, Percentage, or Numeric - Percentage (`displayFormat` dropdown). Renders real exact
     values via a widget-sink technique (see "Key techniques" below), confirmed working in-game
@@ -828,6 +841,127 @@ Copies the whole old global table over by reference the first time the renamed a
 does nothing on every load after, since `ThreatMeterNPDB` exists by then. Not yet confirmed
 in-game that this actually preserved the user's existing settings — worth checking after the
 first `/reload` post-rename.
+
+### v0.9.2: migration shim removed, "Show Target of target" toggle added
+
+**Migration shim removed**: the one-time `ThreatWatchDB` → `ThreatMeterNPDB` copy added in
+v0.9.1 (above) has served its purpose and was deleted from `OnInitialize` on request — it was
+always meant to be temporary (every load after the first no-op'd anyway, since
+`ThreatMeterNPDB` exists by then).
+
+**New toggle**: `targetOfTarget.enabled` (default `true`), a "Show Target of target" checkbox
+— the first row in that label's options, full-width, right under the header. Implemented by
+adding an optional 6th parameter to `LabelOptions` (`includeEnabledToggle`), passed `true` only
+for the target-of-target call site in `BuildOptions` (not threat — wasn't asked for there, and
+threat already has its own always-on fallback chain that doesn't need an equivalent kill
+switch). Wired into both render paths: the real `UpdatePlate` (added to the existing
+`UnitExists(totToken)` condition so the label simply doesn't show when off) and
+`RenderDebugPreview` (wrapped in its own `if totSettings.enabled then ... else
+widgets.totText:Hide() end`, so the debug preview respects the setting too rather than always
+showing a fake target-of-target regardless).
+
+### v0.9.3: "Show Threat" toggle added too
+
+Follow-up request: the same on/off toggle for the Threat label. `threat.enabled` (default
+`true`), wired identically to target-of-target's: `LabelOptions` called with
+`includeEnabledToggle = true` for the threat group too (`BuildOptions`), and both render paths
+(`UpdatePlate`, `RenderDebugPreview`) wrap their *entire* threat block — single display, list
+rows, and background — in `if profile.threat.enabled then ... else` (hide `threatText`, hide
+every list row via `HideListRows`, hide `threatBg`) `end`. Unlike target-of-target's toggle,
+this one has to gate three different widgets (not just one FontString) since threat can be
+rendered as a single value, a multi-row list, or neither, plus its optional background.
+
+### v0.9.4: fix — threat (and target-of-target) stopped showing on existing profiles
+
+Reported by the user immediately after v0.9.3: threat disappeared entirely. Root cause: both
+`enabled` checks (`if profile.threat.enabled then`, and the same pattern added for
+target-of-target in v0.9.2) trusted AceDB-3.0 to supply the `true` default for a key that
+didn't exist yet in the user's *already-populated* `profile.threat`/`profile.targetOfTarget`
+sub-tables. Checked the actual SavedVariables file on disk to confirm: `enabled` wasn't
+physically present there, and neither were several other settings added in earlier versions
+(`bgEnabled`, `secondaryScale`, `soloListMode`, `showOwner`, `listColorByClass`) — AceDB's
+default-filling is a lazy fallback, not a retroactive write into existing nested tables. Those
+earlier settings never surfaced this as a bug because their *consuming code* already read them
+with an explicit `or <default>` (e.g. `GetDisplayFormat`'s `profile.threat.displayFormat or 2`,
+`profile.listCount or 3`) — a value of `nil` and the intended default produced identical
+behavior. The two new `enabled` checks had no such fallback and read `nil` directly as "off."
+
+**Fix**: changed all four `enabled` checks (`UpdatePlate` ×2, `RenderDebugPreview` ×2) from
+bare truthiness to `~= false` — "on unless explicitly set to false," which treats an unset
+value the same as the intended `true` default regardless of whether AceDB ever backfills it.
+
+### v0.9.5: fix — options panel checkbox showed unchecked despite the label actually showing
+
+Follow-up to v0.9.4: the engine now correctly treats an unset `enabled` as "on," but the
+options panel's checkbox `get` was still the plain `ValueGet`, which returns the raw stored
+value (`nil`) — AceGUI renders that as unchecked, a visible mismatch against the label that's
+actually showing. Fixed by wrapping the checkbox's `get` to also apply `~= false` (`local
+rawGet = ValueGet(...); get = function(...) return rawGet(...) ~= false end`), while `set`
+still writes the literal boolean the user picks, same as before.
+
+### v0.9.6: fix — single threat display invisible when list mode was off
+
+Reported by the user: "if you select show player list instead of your own threat, the list
+works. If you check it off, it displays the background selected, but does not show your
+threat." Root cause traced to the v0.8.0 background refactor (above): before that refactor,
+`UpdatePlate` itself called `widgets.threatText:Show()`/`:Hide()` based on
+`ApplyThreatDisplay`'s boolean return. When that refactor changed `ApplyThreatDisplay` to
+return `(success, firstWidget, lastWidget)` for the background to span, the call site started
+discarding the success boolean (`local _, first, last = ApplyThreatDisplay(...)`) and the
+explicit `:Show()` was never relocated into the single-display path itself. List mode's own
+`RenderListRow` already calls `rowWidget:Show()` internally, and the debug preview's
+single-display branch already calls `widgets.threatText:Show()` too — only the real
+single-display chain (`ApplyThreatSingle` → `ApplyExactThreatPercentage`/
+`ApplyThreatLevelFallback`) was missing it. Since a FontString starts hidden
+(`CreateLabel`) and nothing else was telling it to appear, the background (anchored correctly
+to `widgets.threatText` either way) rendered while the text itself stayed invisible.
+
+**Fix**: `ApplyThreatSingle` now calls `widgets.threatText:Show()` itself right after either
+underlying function succeeds, mirroring the pattern the list and debug paths already used.
+
+### v0.9.7: player list — name uses the threat color when class coloring is off
+
+Per request: when "Color name by class" (`listColorByClass`) is off, a row's name was always
+plain white (`nr, ng, nb = 1, 1, 1`), independent of that row's own tanking/not-tanking value
+color. Changed so the name falls back to the same `colorTanking`/`colorNotTanking` color
+already used for the value, instead of white. Implemented in `RenderListRow` itself — the
+shared renderer for both the real list (`ApplyThreatList`) and the debug preview
+(`RenderDebugPreview`) — rather than in each caller, so both stay pixel-identical. Both call
+sites now pass `nr` (and `ng`/`nb`) as `nil` unless class coloring actually resolved a color;
+`RenderListRow` fills in the threat color whenever `nr` comes in `nil`.
+
+### v0.9.8: fix — player list background width ignored secondaryScale, overlapping row 1
+
+Reported by the user: with multiple players shown and "Lower row size" set to 80%, the
+background's width was sometimes wrong and row 1 (full size) could overlap/overflow it.
+
+Root cause: `ApplyBackground` sized its left/right edges from `firstWidget` (row 1) and
+`lastWidget` (the last row) only — correct for the *vertical* span (rows stack top-to-bottom
+in rank order, so first is always topmost and last always bottommost), but wrong
+*horizontally*, since each row's rendered width varies independently of its rank once
+`secondaryScale` shrinks every row after #1. Whichever row happens to render the widest text
+(not necessarily row 1 or the last row — depends on name length and value digits per row) was
+never consulted, so the background could end up narrower than that row's actual text.
+
+**Fix**: `ApplyThreatList` (real list) and `RenderDebugPreview`'s list branch (fake preview)
+now track whichever rendered row has the greatest `:GetStringWidth()` as they go, and return
+it as a third/fourth widget alongside first/last. `ApplyBackground` takes this as an optional
+`widestWidget` parameter and anchors its `LEFT`/`RIGHT` edges to it instead of to
+`firstWidget`/`lastWidget` (still using `firstWidget`'s `TOP` and `lastWidget`'s `BOTTOM` for
+the vertical span, which was never the problem). Using the single widest row for *both*
+horizontal edges works regardless of the configured text alignment: Left/Right-aligned rows
+already share an identical left/right x across the whole stack (per `STACK_POINTS`), so only
+the far edge differs by width; Center-aligned rows share the same horizontal center, so the
+widest row's left and right edges are, by construction, the furthest-out on both sides.
+`ApplyThreatDisplay`'s return signature grew a fourth value (`widestWidget`) to carry this
+from `ApplyThreatList` up to `UpdatePlate`; the single-display path simply returns
+`widgets.threatText` for all three (first/last/widest), since there's only one widget.
+
+### v1.0: first stable release
+
+Flagged by the user right after the v0.9.8 fix above — `.toc` `## Version:` set to `1.0`
+(previous versions were `0.x` pre-release increments). No functional change from v0.9.8;
+purely a version-number/status flip marking the addon as its first stable release.
 
 ### Default values (v2 base defaults, not SavedVariables)
 

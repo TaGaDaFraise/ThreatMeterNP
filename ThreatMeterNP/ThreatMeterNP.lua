@@ -298,14 +298,20 @@ local function PositionListRow(row, plate, settings, index, previousRow)
     end
 end
 
--- Shows (or hides) a solid background spanning from firstWidget's to
--- lastWidget's bounds, with a little padding — covers both the single
--- display (firstWidget == lastWidget) and the player list (spans every
--- visible row) the same way, since it just anchors to whatever text is
--- actually there rather than computing a size itself.
+-- Shows (or hides) a solid background spanning the rendered rows, with a
+-- little padding — covers both the single display (firstWidget ==
+-- lastWidget == widestWidget) and the player list the same way. Top/
+-- bottom come from firstWidget/lastWidget (rows stack top-to-bottom in
+-- rank order, so those two always bound the stack vertically); left/
+-- right both come from widestWidget instead of firstWidget/lastWidget,
+-- since row width varies independently of rank (secondaryScale shrinks
+-- every row after #1), and left/right-aligned rows share an x per the
+-- STACK_POINTS anchoring either way — only the widest row's far edge
+-- actually reaches furthest, so it alone determines both horizontal
+-- edges regardless of alignment.
 local BG_PADDING = 4
 
-local function ApplyBackground(bg, enabled, color, firstWidget, lastWidget)
+local function ApplyBackground(bg, enabled, color, firstWidget, lastWidget, widestWidget)
     if not enabled or not color or not firstWidget or not lastWidget then
         bg:Hide()
         return
@@ -315,10 +321,13 @@ local function ApplyBackground(bg, enabled, color, firstWidget, lastWidget)
         bg:Hide()
         return
     end
+    local sideWidget = widestWidget or firstWidget
     bg:SetColorTexture(color[1], color[2], color[3], alpha)
     bg:ClearAllPoints()
-    bg:SetPoint("TOPLEFT", firstWidget, "TOPLEFT", -BG_PADDING, BG_PADDING)
-    bg:SetPoint("BOTTOMRIGHT", lastWidget, "BOTTOMRIGHT", BG_PADDING, -BG_PADDING)
+    bg:SetPoint("TOP", firstWidget, "TOP", 0, BG_PADDING)
+    bg:SetPoint("BOTTOM", lastWidget, "BOTTOM", 0, -BG_PADDING)
+    bg:SetPoint("LEFT", sideWidget, "LEFT", -BG_PADDING, 0)
+    bg:SetPoint("RIGHT", sideWidget, "RIGHT", BG_PADDING, 0)
     bg:Show()
 end
 
@@ -382,9 +391,14 @@ end
 -- the ordinary single display into threatText."
 local function ApplyThreatSingle(widgets, unitToken)
     if ApplyExactThreatPercentage(widgets.threatText, unitToken) then
+        widgets.threatText:Show()
         return true
     end
-    return ApplyThreatLevelFallback(widgets.threatText, unitToken)
+    if ApplyThreatLevelFallback(widgets.threatText, unitToken) then
+        widgets.threatText:Show()
+        return true
+    end
+    return false
 end
 
 -- Renders one list row's position/font/color/text from already-resolved
@@ -405,6 +419,9 @@ local function RenderListRow(widgets, plate, profile, index, previousRow, name, 
     PositionListRow(rowWidget, plate, profile, index, previousRow)
 
     local valueColor = isTanking and profile.colorTanking or profile.colorNotTanking
+    if not nr then
+        nr, ng, nb = valueColor[1], valueColor[2], valueColor[3]
+    end
 
     local valueFormat
     local a1, a2
@@ -432,9 +449,11 @@ end
 -- multi-line block of text — necessary because WoW text has no way to
 -- mix font sizes within a single FontString, and rows below #1 need to
 -- be independently shrinkable (secondaryScale). Returns
--- (success, firstWidget, lastWidget) for ApplyBackground to span, or
--- false if there was nothing to rank at all (caller falls back to the
--- single display).
+-- (success, firstWidget, lastWidget, widestWidget) for ApplyBackground
+-- to span, or false if there was nothing to rank at all (caller falls
+-- back to the single display). widestWidget is tracked separately from
+-- first/last because secondaryScale can make any row the widest one,
+-- not necessarily row 1 or the last row.
 local function ApplyThreatList(widgets, plate, unitToken)
     local profile = ThreatMeterNP.db.profile.threat
     local rows = CollectThreatRows(unitToken)
@@ -446,6 +465,7 @@ local function ApplyThreatList(widgets, plate, unitToken)
     local wanted = profile.listCount or 3
     local shown = 0
     local previousRow = nil
+    local widestRow, widestWidth = nil, -1
 
     for i = 1, #rows do
         if shown >= wanted then break end
@@ -467,7 +487,7 @@ local function ApplyThreatList(widgets, plate, unitToken)
             shown = shown + 1
 
             local name = UnitName(row.unit) or row.unit
-            local nr, ng, nb = 1, 1, 1
+            local nr, ng, nb
             if profile.listColorByClass then
                 local cr, cg, cb = GetClassColorRGB(row.unit)
                 if cr then nr, ng, nb = cr, cg, cb end
@@ -478,6 +498,10 @@ local function ApplyThreatList(widgets, plate, unitToken)
             local isTanking = row.status >= 2
 
             previousRow = RenderListRow(widgets, plate, profile, shown, previousRow, name, nr, ng, nb, isTanking, raw, scaled, format)
+            local width = previousRow:GetStringWidth()
+            if width > widestWidth then
+                widestWidth, widestRow = width, previousRow
+            end
         end
     end
 
@@ -490,21 +514,22 @@ local function ApplyThreatList(widgets, plate, unitToken)
     if shown == 0 then
         return false
     end
-    return true, widgets.listRows[1], widgets.listRows[shown]
+    return true, widgets.listRows[1], widgets.listRows[shown], widestRow
 end
 
 -- Dispatches to the single display or the ranked list, per the profile,
--- and returns (success, firstWidget, lastWidget) so UpdatePlate can span
--- the optional background across whichever widget(s) actually rendered.
+-- and returns (success, firstWidget, lastWidget, widestWidget) so
+-- UpdatePlate can span the optional background across whichever
+-- widget(s) actually rendered.
 local function ApplyThreatDisplay(widgets, plate, unitToken)
     local profile = ThreatMeterNP.db.profile.threat
 
     local useList = profile.listMode and not (profile.listCount == 1 and profile.soloListMode == "mine")
     if useList then
-        local ok, first, last = ApplyThreatList(widgets, plate, unitToken)
+        local ok, first, last, widest = ApplyThreatList(widgets, plate, unitToken)
         if ok then
             widgets.threatText:Hide()
-            return true, first, last
+            return true, first, last, widest
         end
         -- Nothing to rank right now — fall back to the single display.
         HideListRows(widgets)
@@ -513,7 +538,7 @@ local function ApplyThreatDisplay(widgets, plate, unitToken)
     end
 
     if ApplyThreatSingle(widgets, unitToken) then
-        return true, widgets.threatText, widgets.threatText
+        return true, widgets.threatText, widgets.threatText, widgets.threatText
     end
     widgets.threatText:Hide()
     return false
@@ -585,60 +610,75 @@ local function RenderDebugPreview(plate)
     -- same concept the real target-of-target label and "Display threat
     -- owner" both rely on.
     local totSettings = profile.targetOfTarget
-    ApplyLabelSettings(widgets.totText, plate, totSettings)
-    local tr, tg, tb = totSettings.color[1], totSettings.color[2], totSettings.color[3]
-    if totSettings.colorByClass then
-        local cr, cg, cb = GetClassColorRGBByFilename(topMember.class)
-        if cr then tr, tg, tb = cr, cg, cb end
+    if totSettings.enabled ~= false then
+        ApplyLabelSettings(widgets.totText, plate, totSettings)
+        local tr, tg, tb = totSettings.color[1], totSettings.color[2], totSettings.color[3]
+        if totSettings.colorByClass then
+            local cr, cg, cb = GetClassColorRGBByFilename(topMember.class)
+            if cr then tr, tg, tb = cr, cg, cb end
+        end
+        widgets.totText:SetFormattedText("T: %s", topMember.name)
+        widgets.totText:SetTextColor(tr, tg, tb)
+        widgets.totText:Show()
+    else
+        widgets.totText:Hide()
     end
-    widgets.totText:SetFormattedText("T: %s", topMember.name)
-    widgets.totText:SetTextColor(tr, tg, tb)
-    widgets.totText:Show()
 
     -- Threat: list or single, mirroring ApplyThreatDisplay's own logic
     -- but reading the fake roster instead of real UnitX() calls.
     local tprofile = profile.threat
-    ApplyLabelSettings(widgets.threatText, plate, tprofile)
-    local format = GetDisplayFormat()
-    local first, last
+    if tprofile.enabled ~= false then
+        ApplyLabelSettings(widgets.threatText, plate, tprofile)
+        local format = GetDisplayFormat()
+        local first, last, widest
 
-    if tprofile.listMode then
-        local wanted = tprofile.listCount or 3
-        local previousRow = nil
-        for i = 1, math.min(wanted, #sorted) do
-            local m = sorted[i]
-            local nr, ng, nb = 1, 1, 1
-            if tprofile.listColorByClass then
-                local cr, cg, cb = GetClassColorRGBByFilename(m.class)
-                if cr then nr, ng, nb = cr, cg, cb end
+        if tprofile.listMode then
+            local wanted = tprofile.listCount or 3
+            local previousRow = nil
+            local widestWidth = -1
+            for i = 1, math.min(wanted, #sorted) do
+                local m = sorted[i]
+                local nr, ng, nb
+                if tprofile.listColorByClass then
+                    local cr, cg, cb = GetClassColorRGBByFilename(m.class)
+                    if cr then nr, ng, nb = cr, cg, cb end
+                end
+                previousRow = RenderListRow(widgets, plate, tprofile, i, previousRow, m.name, nr, ng, nb, m.isTanking, m.raw, m.scaled, format)
+                if i == 1 then first = previousRow end
+                last = previousRow
+                local width = previousRow:GetStringWidth()
+                if width > widestWidth then
+                    widestWidth, widest = width, previousRow
+                end
             end
-            previousRow = RenderListRow(widgets, plate, tprofile, i, previousRow, m.name, nr, ng, nb, m.isTanking, m.raw, m.scaled, format)
-            if i == 1 then first = previousRow end
-            last = previousRow
-        end
-        for i = math.min(wanted, #sorted) + 1, #widgets.listRows do
-            widgets.listRows[i]:Hide()
-        end
-        widgets.threatText:Hide()
-    else
-        HideListRows(widgets)
-        local prefix = tprofile.showOwner and (topMember.name .. ": ") or ""
-        local valueFormat, a1, a2
-        if format == 1 then
-            valueFormat, a1 = "%.0f", topMember.raw
-        elseif format == 3 then
-            valueFormat, a1, a2 = "%.0f - %.0f%%", topMember.raw, topMember.scaled
+            for i = math.min(wanted, #sorted) + 1, #widgets.listRows do
+                widgets.listRows[i]:Hide()
+            end
+            widgets.threatText:Hide()
         else
-            valueFormat, a1 = "%.0f%%", topMember.scaled
+            HideListRows(widgets)
+            local prefix = tprofile.showOwner and (topMember.name .. ": ") or ""
+            local valueFormat, a1, a2
+            if format == 1 then
+                valueFormat, a1 = "%.0f", topMember.raw
+            elseif format == 3 then
+                valueFormat, a1, a2 = "%.0f - %.0f%%", topMember.raw, topMember.scaled
+            else
+                valueFormat, a1 = "%.0f%%", topMember.scaled
+            end
+            widgets.threatText:SetFormattedText(prefix .. valueFormat, a1, a2)
+            local valueColor = topMember.isTanking and tprofile.colorTanking or tprofile.colorNotTanking
+            widgets.threatText:SetTextColor(valueColor[1], valueColor[2], valueColor[3])
+            widgets.threatText:Show()
+            first, last, widest = widgets.threatText, widgets.threatText, widgets.threatText
         end
-        widgets.threatText:SetFormattedText(prefix .. valueFormat, a1, a2)
-        local valueColor = topMember.isTanking and tprofile.colorTanking or tprofile.colorNotTanking
-        widgets.threatText:SetTextColor(valueColor[1], valueColor[2], valueColor[3])
-        widgets.threatText:Show()
-        first, last = widgets.threatText, widgets.threatText
-    end
 
-    ApplyBackground(widgets.threatBg, tprofile.bgEnabled, tprofile.bgColor, first, last)
+        ApplyBackground(widgets.threatBg, tprofile.bgEnabled, tprofile.bgColor, first, last, widest)
+    else
+        widgets.threatText:Hide()
+        HideListRows(widgets)
+        widgets.threatBg:Hide()
+    end
 end
 
 -- =====================================================================
@@ -682,7 +722,7 @@ local function UpdatePlate(unitToken, plate)
     ApplyLabelSettings(widgets.totText, plate, profile.targetOfTarget)
 
     local totToken = GetTargetToken(unitToken)
-    if UnitExists(totToken) and not UnitIsUnit(totToken, unitToken) then
+    if profile.targetOfTarget.enabled ~= false and UnitExists(totToken) and not UnitIsUnit(totToken, unitToken) then
         local name = UnitName(totToken)
         widgets.totText:SetFormattedText("T: %s", name or "?")
 
@@ -699,10 +739,15 @@ local function UpdatePlate(unitToken, plate)
         widgets.totText:Hide()
     end
 
-    ApplyLabelSettings(widgets.threatText, plate, profile.threat)
-
-    local _, first, last = ApplyThreatDisplay(widgets, plate, unitToken)
-    ApplyBackground(widgets.threatBg, profile.threat.bgEnabled, profile.threat.bgColor, first, last)
+    if profile.threat.enabled ~= false then
+        ApplyLabelSettings(widgets.threatText, plate, profile.threat)
+        local _, first, last, widest = ApplyThreatDisplay(widgets, plate, unitToken)
+        ApplyBackground(widgets.threatBg, profile.threat.bgEnabled, profile.threat.bgColor, first, last, widest)
+    else
+        widgets.threatText:Hide()
+        HideListRows(widgets)
+        widgets.threatBg:Hide()
+    end
 end
 
 -- Called by Options.lua whenever a setting changes, so sliders/color

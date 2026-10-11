@@ -19,6 +19,7 @@ local defaults = {
             raid = true,
         },
         targetOfTarget = {
+            enabled = true,
             offsetX = 0,
             offsetY = -28,
             font = "Arial Narrow",
@@ -28,6 +29,7 @@ local defaults = {
             colorByClass = false,
         },
         threat = {
+            enabled = true,
             offsetX = 74,
             offsetY = 0,
             font = defaultFont,
@@ -144,7 +146,7 @@ local function Share(n)
     return "relative", 1 / n
 end
 
-local function LabelOptions(order, name, prefix, includeThreatColors, includeColorByClass)
+local function LabelOptions(order, name, prefix, includeThreatColors, includeColorByClass, includeEnabledToggle)
     local o = order
     local function nextOrder() o = o + 1; return o end
 
@@ -156,39 +158,55 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
 
     local args = {
         header = { type = "header", name = name, order = nextOrder() },
-        offsetX = {
-            type = "range", name = "X offset", min = -150, max = 150, step = 1,
-            width = xWidth, relWidth = xRel,
-            order = nextOrder(), get = ValueGet({ prefix, "offsetX" }), set = ValueSet({ prefix, "offsetX" }),
-        },
-        offsetY = {
-            type = "range", name = "Y offset", min = -150, max = 150, step = 1,
-            width = yWidth, relWidth = yRel,
-            order = nextOrder(), get = ValueGet({ prefix, "offsetY" }), set = ValueSet({ prefix, "offsetY" }),
-        },
-        align = {
-            type = "select", name = "Text alignment",
-            width = alignWidth, relWidth = alignRel,
-            order = nextOrder(),
-            desc = "Which edge of the text sits at the X/Y offset: Left/Right anchor that " ..
-                "edge there and the text grows away from it; Center (default) centers the " ..
-                "text on the offset, as before.",
-            values = { LEFT = "Left", CENTER = "Middle", RIGHT = "Right" },
-            get = ValueGet({ prefix, "align" }), set = ValueSet({ prefix, "align" }),
-        },
-        spacer1 = Spacer(nextOrder()),
-        font = {
-            type = "select", name = "Font",
-            width = fontWidth, relWidth = fontRel,
-            order = nextOrder(), values = FontValues, get = ValueGet({ prefix, "font" }), set = ValueSet({ prefix, "font" }),
-        },
-        fontSize = {
-            type = "range", name = "Font size", min = 6, max = 32, step = 1,
-            width = fontSizeWidth, relWidth = fontSizeRel,
-            order = nextOrder(), get = ValueGet({ prefix, "fontSize" }), set = ValueSet({ prefix, "fontSize" }),
-        },
-        spacer2 = Spacer(nextOrder()),
     }
+
+    if includeEnabledToggle then
+        -- Checkbox reads as checked when unset (nil), matching the
+        -- engine's own "enabled ~= false" default-true behavior for an
+        -- existing profile predating this setting — ValueGet alone would
+        -- show it unchecked (nil is falsy) despite the label actually
+        -- showing, a visible mismatch.
+        local rawGet = ValueGet({ prefix, "enabled" })
+        args.enabled = {
+            type = "toggle", name = "Show " .. name, width = "full",
+            order = nextOrder(),
+            get = function(...) return rawGet(...) ~= false end,
+            set = ValueSet({ prefix, "enabled" }),
+        }
+    end
+
+    args.offsetX = {
+        type = "range", name = "X offset", min = -150, max = 150, step = 1,
+        width = xWidth, relWidth = xRel,
+        order = nextOrder(), get = ValueGet({ prefix, "offsetX" }), set = ValueSet({ prefix, "offsetX" }),
+    }
+    args.offsetY = {
+        type = "range", name = "Y offset", min = -150, max = 150, step = 1,
+        width = yWidth, relWidth = yRel,
+        order = nextOrder(), get = ValueGet({ prefix, "offsetY" }), set = ValueSet({ prefix, "offsetY" }),
+    }
+    args.align = {
+        type = "select", name = "Text alignment",
+        width = alignWidth, relWidth = alignRel,
+        order = nextOrder(),
+        desc = "Which edge of the text sits at the X/Y offset: Left/Right anchor that " ..
+            "edge there and the text grows away from it; Center (default) centers the " ..
+            "text on the offset, as before.",
+        values = { LEFT = "Left", CENTER = "Middle", RIGHT = "Right" },
+        get = ValueGet({ prefix, "align" }), set = ValueSet({ prefix, "align" }),
+    }
+    args.spacer1 = Spacer(nextOrder())
+    args.font = {
+        type = "select", name = "Font",
+        width = fontWidth, relWidth = fontRel,
+        order = nextOrder(), values = FontValues, get = ValueGet({ prefix, "font" }), set = ValueSet({ prefix, "font" }),
+    }
+    args.fontSize = {
+        type = "range", name = "Font size", min = 6, max = 32, step = 1,
+        width = fontSizeWidth, relWidth = fontSizeRel,
+        order = nextOrder(), get = ValueGet({ prefix, "fontSize" }), set = ValueSet({ prefix, "fontSize" }),
+    }
+    args.spacer2 = Spacer(nextOrder())
 
     if includeThreatColors then
         local exactValuesNote = "Only used when the game exposes an exact threat number " ..
@@ -339,11 +357,11 @@ local function BuildOptions()
             },
             targetOfTarget = {
                 type = "group", inline = true, name = "Target of target", order = 2,
-                args = LabelOptions(1, "Target of target", "targetOfTarget", false, true),
+                args = LabelOptions(1, "Target of target", "targetOfTarget", false, true, true),
             },
             threat = {
                 type = "group", inline = true, name = "Threat", order = 3,
-                args = LabelOptions(1, "Threat", "threat", true),
+                args = LabelOptions(1, "Threat", "threat", true, false, true),
             },
             debug = {
                 type = "group", inline = true, name = "Debug", order = 4,
@@ -368,14 +386,6 @@ end
 -- =====================================================================
 
 function ThreatMeterNP:OnInitialize()
-    -- One-time migration from the addon's previous name (ThreatWatch).
-    -- The SavedVariables key is tied to the addon's name, so renaming it
-    -- would otherwise silently start everyone over on defaults. Copies
-    -- the whole old table over by reference before AceDB reads it; only
-    -- runs once since ThreatMeterNPDB exists on every load after.
-    if not ThreatMeterNPDB and ThreatWatchDB then
-        ThreatMeterNPDB = ThreatWatchDB
-    end
     self.db = LibStub("AceDB-3.0"):New("ThreatMeterNPDB", defaults, true)
 
     LibStub("AceConfig-3.0"):RegisterOptionsTable("ThreatMeterNP", BuildOptions())

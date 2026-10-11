@@ -13,18 +13,18 @@ Plater, and ElvUI** without needing a different version for each.
 
 ## Status
 
-v1 and v2 validated in-game, including exact threat percentages and the player threat list
-(v0.9.1; renamed from ThreatWatch at this version — settings carry over automatically via a
-one-time migration, see [requirements.md](requirements.md)). See
-[requirements.md](requirements.md) for the full spec and [infos.md](infos.md) for the WoW API
-research behind the implementation.
+**v1.0 — first stable release.** All features validated in-game, including exact threat
+percentages and the player threat list (renamed from ThreatWatch at v0.9.1 — a one-time
+settings migration ran then and has since been removed, see
+[requirements.md](requirements.md)). See [requirements.md](requirements.md) for the full spec
+and [infos.md](infos.md) for the WoW API research behind the implementation.
 
 ## Features
 
 | Label | Shows | Visible on |
 |---|---|---|
-| Target of target | Name of whoever the nameplate's unit is targeting | Enemy nameplates only |
-| Threat | Your own threat on the unit, in a configurable format — Numeric, Percentage, or both — falling back to a fixed **Low**/**Medium**/**High** indicator (green→yellow→red, same scale for tanks and DPS) only on the rare unit where no exact value is available at all | Enemy nameplates only |
+| Target of target | Name of whoever the nameplate's unit is targeting (toggle on/off entirely) | Enemy nameplates only |
+| Threat | Your own threat on the unit, in a configurable format — Numeric, Percentage, or both — falling back to a fixed **Low**/**Medium**/**High** indicator (green→yellow→red, same scale for tanks and DPS) only on the rare unit where no exact value is available at all (toggle on/off entirely) | Enemy nameplates only |
 
 - Per-label position (X/Y), text alignment (Left/Middle/Right — which edge of the text sits at the offset), font (from [LibSharedMedia](https://www.curseforge.com/wow/addons/libsharedmedia-3-0)), font size, and color — target-of-target has one color (or "color by class" — colors the name by the targeted player's class, falling back to the plain color for NPCs), threat has separate colors for "tanking" vs "not tanking".
 - **Threat display format**: Numeric, Percentage, or Numeric - Percentage — applies everywhere threat is shown.
