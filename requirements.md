@@ -24,7 +24,7 @@ Everything below this section is the decision-by-decision history of how ThreatM
 (kept for "why" questions). This section is a current-as-of-last-edit snapshot so work can
 resume without reading all of it.
 
-**Version**: 1.0 (first stable release). Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.0.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -33,8 +33,10 @@ into an already-populated sub-table. Single-display threat text now explicitly c
 on success (§13 v0.9.6) — a regression from the v0.8.0 background refactor meant it never
 became visible when list mode was off. Player list rows now color the name by the threat
 (tanking/not-tanking) color whenever "Color name by class" is off, instead of plain white
-(§13 v0.9.7). The player-list background now spans the widest rendered row rather than just
-the first/last row's width, fixing overlap with "Lower row size" set below 100% (§13 v0.9.8).
+(§13 v0.9.7). The player-list background's horizontal span was briefly computed from the actual widest
+rendered row (§13 v0.9.8), but that broke list rows past #1 entirely (§13 v1.0.1) and was
+reverted — it now always uses row 1's width instead, which fixes the original overlap report
+without touching a secret-tainted widget's geometry.
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
@@ -962,6 +964,35 @@ from `ApplyThreatList` up to `UpdatePlate`; the single-display path simply retur
 Flagged by the user right after the v0.9.8 fix above — `.toc` `## Version:` set to `1.0`
 (previous versions were `0.x` pre-release increments). No functional change from v0.9.8;
 purely a version-number/status flip marking the addon as its first stable release.
+
+### v1.0.1: fix — v0.9.8's width fix broke list rows past #1
+
+Reported by the user immediately after v1.0 shipped: "the list of players is not showing
+beyond first player anymore." Root cause: v0.9.8's fix called `previousRow:GetStringWidth()`
+on each rendered row to find the actual widest one, right after that row's text was set via
+`RenderListRow`'s `SetFormattedText` call — but that text can carry a Blizzard "secret" value
+(the per-row raw/scaled threat number, handed to the widget via the sink technique, see
+`ApplyExactThreatPercentage`/`RenderListRow`). Querying geometry back off a widget that just
+received secret-tainted text appears to throw the same way reading the secret value directly
+does — this is a genuinely different operation (`GetStringWidth()` never touches the secret
+Lua value, it asks the widget for its own rendered pixel width), but evidently the client
+still blocks it, presumably to close off exactly this kind of side-channel (inferring a secret
+number's digit count from its on-screen width). The resulting Lua error aborted
+`ApplyThreatList`'s render loop immediately after row 1 — which had already fully rendered and
+`:Show()`n by that point — so every row after it was simply never reached.
+
+**Fix**: reverted the widest-row measurement entirely (`ApplyThreatList`, `ApplyThreatDisplay`,
+`UpdatePlate`'s call site, and the equivalent tracking in `RenderDebugPreview`'s list branch
+all dropped back to their pre-v0.9.8 three-value `(success, first, last)` shape — no
+`widestWidget` fourth value anywhere). `ApplyBackground` keeps the four-independent-edge
+anchoring v0.9.8 introduced (`TOP`/`BOTTOM`/`LEFT`/`RIGHT` each set separately, rather than two
+diagonal corners), since that part wasn't the problem — but its `LEFT`/`RIGHT` edges are now
+both anchored to `firstWidget` (row 1) unconditionally, instead of to whichever row measured
+widest. Row 1 is always rendered at full, unscaled size while every row after it is shrunk by
+`secondaryScale`, so row 1 is virtually always the actual widest row anyway — this still fixes
+the user's original v0.9.8 overlap report (row 1 no longer gets clipped by a narrower, scaled
+down last row's width) without ever touching a secret-tainted widget's geometry. Documented
+directly in a comment above `ApplyBackground` so this isn't accidentally reintroduced later.
 
 ### Default values (v2 base defaults, not SavedVariables)
 

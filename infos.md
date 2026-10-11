@@ -432,6 +432,30 @@ already found.
   was examined from a copy in `_classic_`/`_classic_era_`/`_anniversary_`/`_retail_` instead,
   same source either way since it's not client-specific code.
 
+### Geometry queries on a widget that just received secret-tainted text also throw
+
+Discovered while fixing a background-sizing bug (ThreatMeterNP v0.9.8, reverted in v1.0.1): a
+FontString's own `:GetStringWidth()` — called on `widgets.listRows[i]` right after
+`:SetFormattedText(...)` rendered that row's threat value via the widget-sink technique (see
+"the actual breakthrough" above) — appears to throw the same family of error as reading a
+secret Lua value directly, even though `GetStringWidth()` never touches the secret value
+itself; it only asks the widget for its own rendered pixel width. Not independently confirmed
+against a Blizzard error message (the symptom observed was each subsequent list row silently
+failing to render — consistent with an uncaught Lua error aborting the render loop immediately
+after the first row, which already renders before the width query runs), but strong enough
+circumstantial evidence to treat as true going forward: a `GetWidth()`/`GetHeight()`/
+`GetLeft()`/`GetRight()`-style geometry read off a widget, taken after handing it secret-prone
+text, is not safe to assume works just because the *value itself* was never read in Lua.
+Plausible rationale: this closes off exactly the kind of side-channel the whole secret-value
+system exists to prevent (inferring a secret number's digit count from its on-screen width).
+
+**Practical implication**: once a widget has displayed a value through the sink technique,
+treat it as fully opaque from then on — don't query its rendered geometry back, even for
+unrelated purposes like background sizing. If a background/layout needs to span rendered text
+whose content may include a secret value, size it off something else that's known not to
+depend on the secret portion (e.g. a fixed reference row, like ThreatMeterNP's player list
+background now using row 1's bounds unconditionally rather than measuring each row).
+
 ## Open questions / not yet scanned
 - Exact structure of `plate.unitFrame` when Plater is active vs. default Blizzard nameplates
   vs. ElvUI nameplates (requirements.md says "add info to existing nameplates (Blizzard,

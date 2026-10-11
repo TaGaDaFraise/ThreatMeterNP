@@ -13,7 +13,7 @@ Plater, and ElvUI** without needing a different version for each.
 
 ## Status
 
-**v1.0 — first stable release.** All features validated in-game, including exact threat
+**v1.0.1.** All features validated in-game, including exact threat
 percentages and the player threat list (renamed from ThreatWatch at v0.9.1 — a one-time
 settings migration ran then and has since been removed, see
 [requirements.md](requirements.md)). See [requirements.md](requirements.md) for the full spec

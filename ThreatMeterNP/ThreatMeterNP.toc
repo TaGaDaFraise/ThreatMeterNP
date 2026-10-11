@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: ThreatMeterNP
 ## Notes: Adds target-of-target and a threat-gap number to enemy nameplates. Works with Blizzard, Plater, and ElvUI nameplates.
-## Version: 1.0
+## Version: 1.0.1
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
 ## SavedVariables: ThreatMeterNPDB
