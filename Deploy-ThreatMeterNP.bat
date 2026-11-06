@@ -5,7 +5,7 @@ rem Deploys the ThreatMeterNP addon source into a WoW client's AddOns folder.
 rem To target a different client/install later, change WOW_ADDONS_DIR below.
 
 set "SOURCE_DIR=%~dp0ThreatMeterNP"
-set "WOW_ADDONS_DIR=D:\World of Warcraft\_classic_beta_\Interface\AddOns"
+set "WOW_ADDONS_DIR=D:\World of Warcraft\_forever_\Interface\AddOns"
 set "DEST_DIR=%WOW_ADDONS_DIR%\ThreatMeterNP"
 
 if not exist "%SOURCE_DIR%" (

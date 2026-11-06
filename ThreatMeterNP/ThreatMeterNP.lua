@@ -119,9 +119,16 @@ end
 -- to Lua. That's why pct/rawThreat are never touched by
 -- IsUsableNumber/issecretvalue here — only passed straight through.
 local function ApplyExactThreatPercentage(text, unitToken)
-    local isTanking, status, pct, _, rawThreat = UnitDetailedThreatSituation("player", unitToken)
+    -- Order matters: GetThreatOwnerPrefix does plain UnitExists/UnitIsUnit
+    -- `if` checks, and those must run before UnitDetailedThreatSituation
+    -- below introduces secret values into this call's execution — once
+    -- that happens, the client taints the rest of the call, and even an
+    -- unrelated, otherwise-ordinary boolean result (UnitIsUnit comparing
+    -- two plain unit tokens) comes back wrapped as secret too, throwing
+    -- on the very next `if` that touches it. See infos.md.
     local format = GetDisplayFormat()
     local prefix = GetThreatOwnerPrefix(unitToken)
+    local isTanking, status, pct, _, rawThreat = UnitDetailedThreatSituation("player", unitToken)
 
     if format == 1 then
         if type(rawThreat) ~= "number" then return false end
@@ -178,12 +185,19 @@ local THREAT_STEPS = {
 }
 
 local function ApplyThreatLevelFallback(text, unitToken)
+    -- GetThreatOwnerPrefix first, same reasoning as
+    -- ApplyExactThreatPercentage: it does plain UnitExists/UnitIsUnit
+    -- `if` checks, which need to run before any threat-situation API
+    -- call below might taint this execution — even one, like
+    -- UnitThreatSituation here, whose result passed IsUsableNumber this
+    -- time. See infos.md.
+    local prefix = GetThreatOwnerPrefix(unitToken)
     local status = UnitThreatSituation("player", unitToken)
     if not IsUsableNumber(status) then
         return false
     end
     local step = THREAT_STEPS[status] or THREAT_STEPS[0]
-    text:SetFormattedText("%s%s", GetThreatOwnerPrefix(unitToken), step.text)
+    text:SetFormattedText("%s%s", prefix, step.text)
     text:SetTextColor(step.r, step.g, step.b)
     return true
 end
@@ -470,6 +484,24 @@ local function ApplyThreatList(widgets, plate, unitToken)
         if shown >= wanted then break end
         local row = rows[i]
 
+        -- Resolve name/color/isTanking BEFORE fetching this row's
+        -- secret-prone raw/scaled value below. Once that call introduces
+        -- a secret value into this iteration's execution, even an
+        -- unrelated plain boolean test — UnitName(...)'s own truthiness
+        -- check below, or GetClassColorRGB's internal unit checks — can
+        -- come back tainted and throw, the same mechanism that broke
+        -- GetThreatOwnerPrefix's UnitIsUnit call in
+        -- ApplyExactThreatPercentage (see infos.md). status is already
+        -- confirmed non-secret (Readable, above), so comparing it is
+        -- always safe regardless of order.
+        local name = UnitName(row.unit) or row.unit
+        local nr, ng, nb
+        if profile.listColorByClass then
+            local cr, cg, cb = GetClassColorRGB(row.unit)
+            if cr then nr, ng, nb = cr, cg, cb end
+        end
+        local isTanking = row.status >= 2
+
         -- The display value (raw/percentage) is fetched fresh per row
         -- and handed straight to a FontString's own :SetFormattedText,
         -- the same sanctioned sink ApplyExactThreatPercentage uses — it
@@ -484,18 +516,6 @@ local function ApplyThreatList(widgets, plate, unitToken)
         local needsScaled = format == 2 or format == 3
         if (not needsRaw or type(raw) == "number") and (not needsScaled or type(scaled) == "number") then
             shown = shown + 1
-
-            local name = UnitName(row.unit) or row.unit
-            local nr, ng, nb
-            if profile.listColorByClass then
-                local cr, cg, cb = GetClassColorRGB(row.unit)
-                if cr then nr, ng, nb = cr, cg, cb end
-            end
-
-            -- status is already confirmed non-secret (Readable, above),
-            -- so this comparison and the color pick are both safe.
-            local isTanking = row.status >= 2
-
             previousRow = RenderListRow(widgets, plate, profile, shown, previousRow, name, nr, ng, nb, isTanking, raw, scaled, format)
         end
     end

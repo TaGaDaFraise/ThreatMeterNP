@@ -456,6 +456,46 @@ whose content may include a secret value, size it off something else that's know
 depend on the secret portion (e.g. a fixed reference row, like ThreatMeterNP's player list
 background now using row 1's bounds unconditionally rather than measuring each row).
 
+### Secret-value taint propagates to LATER, unrelated calls in the same execution
+
+Discovered from a live error report (v1.0.2 fix):
+`attempt to perform boolean test on a secret boolean value (execution tainted by 'ThreatMeterNP')`
+on a plain `UnitIsUnit(ownerToken, "player")` call inside `GetThreatOwnerPrefix` — a function that
+never touches threat data at all. The crash only happened because, by the time it ran,
+`ApplyExactThreatPercentage` had already called `UnitDetailedThreatSituation` a few lines above it
+in the same function, assigning its (secret) returns to locals. **The taint isn't scoped to the
+specific secret value — once an execution has been exposed to a secret value at all, the client
+appears to start wrapping OTHER, unrelated boolean-returning calls later in that same execution as
+secret too**, even calls (`UnitIsUnit` on two perfectly ordinary unit tokens) that would never be
+secret on their own and don't touch the original secret data in any way. The error message's own
+wording — "execution tainted," not "value tainted" — matches this: it's the continuation that's
+marked, not just the one binding.
+
+This is a stricter, more pervasive rule than anything else recorded above (`type()`/
+`issecretvalue()` on the secret value itself being safe doesn't help here — the thing that threw,
+`UnitIsUnit`, was never passed the secret value as an argument at all).
+
+**Practical implication for this addon and any future one touching threat/secret data**: within a
+single function, do every ordinary, unguarded `if`/`and`/`or`-based unit check (`UnitExists`,
+`UnitIsUnit`, truthiness tests on `UnitName` etc.) *before* calling anything that can return a
+secret value, not after — regardless of whether that specific call's result is used in the risky
+check. Fixed in `ApplyExactThreatPercentage`, `ApplyThreatLevelFallback` (both reorder
+`GetThreatOwnerPrefix` before the threat-situation call), and `ApplyThreatList`'s per-row loop
+(reorders `UnitName`/`GetClassColorRGB`/`isTanking` before `UnitDetailedThreatSituation`).
+
+**Open question, not yet confirmed**: whether this taint can persist *across* separate units in
+the same `OnUpdate` tick — `UpdatePlate` is called once per nameplate via its own `pcall`, but all
+of those calls happen inside one invocation of the driver's outer `OnUpdate` callback
+(`ThreatMeterNP.lua`'s update loop: `for unitToken, plate in pairs(unitToPlate) do pcall(UpdatePlate, ...) end`).
+If WoW's taint reset boundary is the outer callback invocation rather than each individual
+`pcall`, then one nameplate with real secret threat data could taint every *other* nameplate
+processed in that same tick too, even ones with no threat data of their own — which would mean
+the per-function reordering fix above isn't sufficient on its own, and the loop itself would need
+restructuring (e.g. each nameplate's update scheduled as its own fresh top-level callback via
+`C_Timer.After(0, ...)`, not iterated inline). Not confirmed either way yet; worth specifically
+checking the error's `unitToken` against *which* nameplate actually had threat data if this
+recurs, now that per-function reordering is in place.
+
 ## Open questions / not yet scanned
 - Exact structure of `plate.unitFrame` when Plater is active vs. default Blizzard nameplates
   vs. ElvUI nameplates (requirements.md says "add info to existing nameplates (Blizzard,

@@ -24,7 +24,16 @@ Everything below this section is the decision-by-decision history of how ThreatM
 (kept for "why" questions). This section is a current-as-of-last-edit snapshot so work can
 resume without reading all of it.
 
-**Version**: 1.0.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Deploy target**: the WoW Forever client moved from the Beta slot (`_classic_beta_`) to a new
+`_forever_` slot as of 2026-11-06 — same interface version (`16001`, confirmed still listed as
+compatible by other installed addons' `.toc` files on the new install), just a different folder.
+`Deploy-ThreatMeterNP.bat`'s `WOW_ADDONS_DIR` was updated to
+`D:\World of Warcraft\_forever_\Interface\AddOns`; §3 and infos.md's client-identity notes below
+still say `_classic_beta_` since they're a historical record of when/how that was derived, not a
+live config value — don't "fix" those to match, update the deploy script again if the path moves
+once more.
+
+**Version**: 1.0.2. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -993,6 +1002,27 @@ widest. Row 1 is always rendered at full, unscaled size while every row after it
 the user's original v0.9.8 overlap report (row 1 no longer gets clipped by a narrower, scaled
 down last row's width) without ever touching a secret-tainted widget's geometry. Documented
 directly in a comment above `ApplyBackground` so this isn't accidentally reintroduced later.
+
+### v1.0.2: fix — secret-value taint from one call breaking an unrelated later call
+
+Reported live error: `ThreatMeterNP.lua:102: attempt to perform boolean test on a secret boolean
+value (execution tainted by 'ThreatMeterNP')`, inside `GetThreatOwnerPrefix`'s
+`UnitIsUnit(ownerToken, "player")` check. That function never touches threat data at all — the
+crash happened because `ApplyExactThreatPercentage` called `UnitDetailedThreatSituation` (which
+returns secret values) a few lines *before* calling `GetThreatOwnerPrefix`, in the same function.
+Root cause, newly confirmed and written up in full in [infos.md](infos.md): secret-value taint
+isn't scoped to the specific secret value — once an execution has touched one at all, the client
+starts wrapping *other, unrelated* boolean-returning calls later in that same execution as secret
+too, even ones (like `UnitIsUnit` on two ordinary unit tokens) that never touch the original
+secret data.
+
+**Fix**: reordered three spots so every plain, unguarded unit check runs *before* the
+secret-returning call in the same function, not after — `ApplyExactThreatPercentage` and
+`ApplyThreatLevelFallback` both now call `GetThreatOwnerPrefix` first; `ApplyThreatList`'s
+per-row loop now resolves `name`/`nr,ng,nb`/`isTanking` before calling
+`UnitDetailedThreatSituation` for that row. Left as an open question in infos.md: whether this
+taint could also leak *across* nameplates processed in the same `OnUpdate` tick, which would need
+a bigger fix (restructuring the update loop) — not confirmed yet either way.
 
 ### Default values (v2 base defaults, not SavedVariables)
 
