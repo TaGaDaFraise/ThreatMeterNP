@@ -249,8 +249,9 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
             width = displayFormatWidth, relWidth = displayFormatRel,
             order = nextOrder(),
             desc = "\"Threat Differential\" always shows just your own standing (ignoring the " ..
-                "player-list options below) — how far ahead of #2 you are while tanking, or " ..
-                "how close you are to the current leader while not.",
+                "player-list options below): your threat percentage plus how far ahead of #2 " ..
+                "you are while tanking, or how close you are to the current leader while not " ..
+                "(e.g. \"73% (+42% lead)\" or \"48% (52% of lead)\").",
             values = { [1] = "Numeric", [2] = "Percentage", [3] = "Numeric - Percentage", [4] = "Threat Differential" },
             get = ValueGet({ prefix, "displayFormat" }), set = ValueSet({ prefix, "displayFormat" }),
         }

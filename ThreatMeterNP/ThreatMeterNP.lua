@@ -131,24 +131,31 @@ local function ApplyExactThreatPercentage(text, unitToken)
     local isTanking, status, pct, rawPct, rawThreat = UnitDetailedThreatSituation("player", unitToken)
 
     if format == 4 then
-        -- "Threat Differential": your standing relative to the relevant
-        -- comparison point, not an absolute value. Mirrors Blizzard's
-        -- own built-in numeric threat indicator (UnitFrame.lua
-        -- UnitFrame_UpdateThreatIndicator, see infos.md), which picks
-        -- between the same two values the same way. Can't branch on
-        -- `isTanking` above directly — it can be secret, and a bare
-        -- `if` on a secret boolean throws — so this uses `status`
-        -- instead (guarded below), the same "reliably non-secret"
-        -- signal the Low/Medium/High fallback already depends on; once
-        -- confirmed non-secret, comparing it (status >= 2) is an
-        -- ordinary number comparison, safe regardless of taint.
+        -- "Threat Differential": your absolute threat percentage
+        -- (scaledPercentage, same number "Percentage" mode shows)
+        -- alongside your standing relative to the relevant comparison
+        -- point. Mirrors Blizzard's own built-in numeric threat
+        -- indicator (UnitFrame.lua UnitFrame_UpdateThreatIndicator, see
+        -- infos.md) for the comparison half, which picks between the
+        -- same two values the same way. Can't branch on `isTanking`
+        -- above directly — it can be secret, and a bare `if` on a
+        -- secret boolean throws — so this uses `status` instead
+        -- (guarded below), the same "reliably non-secret" signal the
+        -- Low/Medium/High fallback already depends on; once confirmed
+        -- non-secret, comparing it (status >= 2) is an ordinary number
+        -- comparison, safe regardless of taint.
         if type(status) ~= "number" or issecretvalue(status) then return false end
+        local hasAbs = type(pct) == "number"
         if status >= 2 then
             -- Tanking: a true lead percentage over the #2 threat
             -- holder, already computed engine-side.
             local leadPct = UnitThreatPercentageOfLead("player", unitToken)
             if type(leadPct) ~= "number" then return false end
-            text:SetFormattedText("%s+%.0f%%", prefix, leadPct)
+            if hasAbs then
+                text:SetFormattedText("%s%.0f%% (+%.0f%% lead)", prefix, pct, leadPct)
+            else
+                text:SetFormattedText("%s+%.0f%%", prefix, leadPct)
+            end
         else
             -- Not tanking: rawPercentage (your threat as a percentage
             -- of the current leader's) is the closest available
@@ -159,7 +166,11 @@ local function ApplyExactThreatPercentage(text, unitToken)
             -- throws). Labeled "of lead" rather than invented as a
             -- fabricated "-N%" gap.
             if type(rawPct) ~= "number" then return false end
-            text:SetFormattedText("%s%.0f%% of lead", prefix, rawPct)
+            if hasAbs then
+                text:SetFormattedText("%s%.0f%% (%.0f%% of lead)", prefix, pct, rawPct)
+            else
+                text:SetFormattedText("%s%.0f%% of lead", prefix, rawPct)
+            end
         end
     elseif format == 1 then
         if type(rawThreat) ~= "number" then return false end
@@ -743,11 +754,13 @@ local function RenderDebugPreview(plate)
                 -- Debug preview always stands in for "you" via whichever
                 -- fake member ranks #1 (topMember, by construction) —
                 -- so there's no fake scenario where "you" aren't tanking
-                -- here; shows the lead over #2 using plain (never
-                -- secret) fake numbers, same framing as the real
-                -- tanking branch in ApplyExactThreatPercentage.
+                -- here; shows the absolute percentage plus the lead over
+                -- #2 using plain (never secret) fake numbers, same
+                -- framing as the real tanking branch in
+                -- ApplyExactThreatPercentage.
                 local second = sorted[2]
-                valueFormat, a1 = "+%.0f%%", second and (topMember.scaled - second.scaled) or topMember.scaled
+                local lead = second and (topMember.scaled - second.scaled) or topMember.scaled
+                valueFormat, a1, a2 = "%.0f%% (+%.0f%% lead)", topMember.scaled, lead
             elseif format == 1 then
                 valueFormat, a1 = "%.0f", topMember.raw
             elseif format == 3 then

@@ -33,7 +33,7 @@ still say `_classic_beta_` since they're a historical record of when/how that wa
 live config value — don't "fix" those to match, update the deploy script again if the path moves
 once more.
 
-**Version**: 1.1.0. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.1.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -50,6 +50,7 @@ unrelated calls in the same execution was fixed in `GetThreatOwnerPrefix`'s call
 v1.0.2). v1.1.0 adds a 4th display format, **Threat Differential** (your own standing vs. the
 relevant comparison point, forcing single display), and fixes the player list's sort to use
 threat percentage as a tiebreak within members sharing the same coarse status (§13 v1.1.0).
+v1.1.1 adds your absolute threat percentage alongside the differential figure (§13 v1.1.1).
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
@@ -73,12 +74,14 @@ threat percentage as a tiebreak within members sharing the same coarse status (�
     lookup (mob's current target = aggro holder), not threat-table ranking, so it works
     unconditionally.
     - **Threat Differential** (`displayFormat == 4`, added v1.1.0): shows only your own
-      standing, framed as a comparison rather than an absolute value — `+N%` lead over the #2
-      threat holder while tanking (`UnitThreatPercentageOfLead`), or `N% of lead` (your threat
-      as a percentage of the current leader's, `rawPercentage`) while not. Always forces the
-      single display, overriding `listMode`/`soloListMode` (which the options panel then hides,
-      with a note explaining why) — see "v1.1.0" in §13 for why the "not tanking" case can't be
-      a literal subtracted gap number.
+      standing — your absolute threat percentage (`scaledPercentage`, same number "Percentage"
+      mode shows) plus a comparison figure, e.g. `"73% (+42% lead)"` while tanking
+      (`UnitThreatPercentageOfLead`'s lead over #2), or `"48% (52% of lead)"` while not (your
+      threat as a percentage of the current leader's, `rawPercentage`) — added v1.1.1 after the
+      first cut showed only the comparison figure, per request. Always forces the single
+      display, overriding `listMode`/`soloListMode` (which the options panel then hides, with a
+      note explaining why) — see "v1.1.0"/"v1.1.1" in §13 for why the "not tanking" case can't
+      be a literal subtracted gap number.
   - **List**: instead of just the player, shows 1-3 (`listCount`, slider) group/raid members,
     each with name (optionally class-colored — `listColorByClass`) and value in the same
     display-format setting (except Threat Differential, which forces single display instead —
@@ -1098,6 +1101,18 @@ propagation finding means even a *later, unrelated* plain `if` check for a *diff
 that same loop could start throwing too — so every plain `UnitExists`/`Readable(status)` check
 across every member now completes in its own first pass, before the second pass fetches
 percentages for tiebreaking at all.
+
+### v1.1.1: Threat Differential now also shows the absolute percentage
+
+Follow-up request right after v1.1.0 shipped: show the absolute threat value too, not just the
+differential figure. `ApplyExactThreatPercentage`'s `format == 4` branch now prefixes the
+existing comparison text with `scaledPercentage` (the same number "Percentage" mode shows,
+already being fetched regardless of format) — `"73% (+42% lead)"` while tanking, `"48% (52% of
+lead)"` while not — falling back to the comparison-only text from v1.1.0 if the absolute
+percentage happens to be unavailable at that moment (`type(pct) ~= "number"`), rather than
+hiding the whole display over a missing secondary number. `RenderDebugPreview`'s fake-data
+preview updated to match (`"%.0f%% (+%.0f%% lead)"`, using the fake roster's `topMember.scaled`
+for the absolute half).
 
 ### Default values (v2 base defaults, not SavedVariables)
 
