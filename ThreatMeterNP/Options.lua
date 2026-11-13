@@ -248,7 +248,10 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
             type = "select", name = "Display format",
             width = displayFormatWidth, relWidth = displayFormatRel,
             order = nextOrder(),
-            values = { [1] = "Numeric", [2] = "Percentage", [3] = "Numeric - Percentage" },
+            desc = "\"Threat Differential\" always shows just your own standing (ignoring the " ..
+                "player-list options below) — how far ahead of #2 you are while tanking, or " ..
+                "how close you are to the current leader while not.",
+            values = { [1] = "Numeric", [2] = "Percentage", [3] = "Numeric - Percentage", [4] = "Threat Differential" },
             get = ValueGet({ prefix, "displayFormat" }), set = ValueSet({ prefix, "displayFormat" }),
         }
         args.showOwner = {
@@ -258,10 +261,20 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
                 "number (e.g. \"Bob: 87%\"), or \"You\" when that's you. Uses the unit's " ..
                 "current target, so it works regardless of the exact-value restrictions above.",
             order = nextOrder(),
-            hidden = function() return ThreatMeterNP.db.profile.threat.listMode end,
+            hidden = function()
+                local t = ThreatMeterNP.db.profile.threat
+                return t.listMode and t.displayFormat ~= 4
+            end,
             get = ValueGet({ prefix, "showOwner" }), set = ValueSet({ prefix, "showOwner" }),
         }
         args.spacer4 = Spacer(nextOrder())
+        args.differentialNote = {
+            type = "description", width = "full",
+            name = "Player list options aren't available while \"Threat Differential\" is the " ..
+                "display format above, since that format always shows just your own standing.",
+            order = nextOrder(),
+            hidden = function() return ThreatMeterNP.db.profile.threat.displayFormat ~= 4 end,
+        }
         args.listMode = {
             type = "toggle", name = "Show a player list instead of your own threat", width = "full",
             desc = "Shows up to the configured number of group/raid members ranked by threat " ..
@@ -269,13 +282,17 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
                 "value the game currently exposes to add-ons at that moment — may show fewer " ..
                 "rows (or none) when it doesn't.",
             order = nextOrder(),
+            hidden = function() return ThreatMeterNP.db.profile.threat.displayFormat == 4 end,
             get = ValueGet({ prefix, "listMode" }), set = ValueSet({ prefix, "listMode" }),
         }
         args.listCount = {
             type = "range", name = "Players shown", width = "full",
             min = 1, max = 3, step = 1,
             order = nextOrder(),
-            hidden = function() return not ThreatMeterNP.db.profile.threat.listMode end,
+            hidden = function()
+                local t = ThreatMeterNP.db.profile.threat
+                return t.displayFormat == 4 or not t.listMode
+            end,
             get = ValueGet({ prefix, "listCount" }), set = ValueSet({ prefix, "listCount" }),
         }
         args.soloListMode = {
@@ -287,7 +304,7 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
             order = nextOrder(),
             hidden = function()
                 local t = ThreatMeterNP.db.profile.threat
-                return not (t.listMode and t.listCount == 1)
+                return t.displayFormat == 4 or not (t.listMode and t.listCount == 1)
             end,
             get = ValueGet({ prefix, "soloListMode" }), set = ValueSet({ prefix, "soloListMode" }),
         }
@@ -299,14 +316,17 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
             order = nextOrder(),
             hidden = function()
                 local t = ThreatMeterNP.db.profile.threat
-                return not (t.listMode and t.listCount > 1)
+                return t.displayFormat == 4 or not (t.listMode and t.listCount > 1)
             end,
             get = ValueGet({ prefix, "secondaryScale" }), set = ValueSet({ prefix, "secondaryScale" }),
         }
         args.listColorByClass = {
             type = "toggle", name = "Color names by class", width = "full",
             order = nextOrder(),
-            hidden = function() return not ThreatMeterNP.db.profile.threat.listMode end,
+            hidden = function()
+                local t = ThreatMeterNP.db.profile.threat
+                return t.displayFormat == 4 or not t.listMode
+            end,
             get = ValueGet({ prefix, "listColorByClass" }), set = ValueSet({ prefix, "listColorByClass" }),
         }
     else

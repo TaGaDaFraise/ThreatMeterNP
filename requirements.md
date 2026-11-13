@@ -33,7 +33,7 @@ still say `_classic_beta_` since they're a historical record of when/how that wa
 live config value — don't "fix" those to match, update the deploy script again if the path moves
 once more.
 
-**Version**: 1.0.2. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.1.0. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -45,7 +45,11 @@ became visible when list mode was off. Player list rows now color the name by th
 (§13 v0.9.7). The player-list background's horizontal span was briefly computed from the actual widest
 rendered row (§13 v0.9.8), but that broke list rows past #1 entirely (§13 v1.0.1) and was
 reverted — it now always uses row 1's width instead, which fixes the original overlap report
-without touching a secret-tainted widget's geometry.
+without touching a secret-tainted widget's geometry. Secret-value taint propagating to later,
+unrelated calls in the same execution was fixed in `GetThreatOwnerPrefix`'s callers (§13
+v1.0.2). v1.1.0 adds a 4th display format, **Threat Differential** (your own standing vs. the
+relevant comparison point, forcing single display), and fixes the player list's sort to use
+threat percentage as a tiebreak within members sharing the same coarse status (§13 v1.1.0).
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
@@ -60,21 +64,33 @@ without touching a secret-tainted widget's geometry.
   the whole label off entirely — same on/off pattern as target-of-target's, added right after
   it on request. One of two modes (toggle in options, `listMode`) when enabled:
   - **Single** (default): the player's own threat on that unit, in a configurable format —
-    Numeric, Percentage, or Numeric - Percentage (`displayFormat` dropdown). Renders real exact
-    values via a widget-sink technique (see "Key techniques" below), confirmed working in-game
-    — not an estimate. Falls back to a fixed Low/Medium/High indicator only on the rare unit
-    where no value is available at all. Optional **"Display threat owner"** toggle
-    (`showOwner`, single mode only) prefixes the value with the name of whoever currently has
-    aggro (`"Bob: 87%"`, or `"You: 87%"`) — reuses the target-of-target lookup (mob's current
-    target = aggro holder), not threat-table ranking, so it works unconditionally.
+    Numeric, Percentage, Numeric - Percentage, or **Threat Differential** (`displayFormat`
+    dropdown). Renders real exact values via a widget-sink technique (see "Key techniques"
+    below), confirmed working in-game — not an estimate. Falls back to a fixed Low/Medium/High
+    indicator only on the rare unit where no value is available at all. Optional **"Display
+    threat owner"** toggle (`showOwner`, single mode only) prefixes the value with the name of
+    whoever currently has aggro (`"Bob: 87%"`, or `"You: 87%"`) — reuses the target-of-target
+    lookup (mob's current target = aggro holder), not threat-table ranking, so it works
+    unconditionally.
+    - **Threat Differential** (`displayFormat == 4`, added v1.1.0): shows only your own
+      standing, framed as a comparison rather than an absolute value — `+N%` lead over the #2
+      threat holder while tanking (`UnitThreatPercentageOfLead`), or `N% of lead` (your threat
+      as a percentage of the current leader's, `rawPercentage`) while not. Always forces the
+      single display, overriding `listMode`/`soloListMode` (which the options panel then hides,
+      with a note explaining why) — see "v1.1.0" in §13 for why the "not tanking" case can't be
+      a literal subtracted gap number.
   - **List**: instead of just the player, shows 1-3 (`listCount`, slider) group/raid members,
     each with name (optionally class-colored — `listColorByClass`) and value in the same
-    display-format setting. **Ranked by `UnitThreatSituation` status (0-3), not raw threat
-    magnitude** — v0.6.x ranked by raw threat and it never actually populated beyond one row on
-    this client (raw threat was secret for every member, every time); v0.7.0 switched the
-    ranking key to `status`, the same signal the single-display fallback already depends on
-    reliably. Falls back to the single-value display only when literally nobody has any
-    registered threat on the unit. See "v0.7.0" in §13 for the full rationale.
+    display-format setting (except Threat Differential, which forces single display instead —
+    see above). **Ranked by `UnitThreatSituation` status (0-3) first, then by threat percentage
+    as a tiebreak** — v0.6.x ranked by raw threat and it never actually populated beyond one row
+    on this client (raw threat was secret for every member, every time); v0.7.0 switched the
+    primary ranking key to `status`, the same signal the single-display fallback already
+    depends on reliably; v1.1.0 added the percentage tiebreak since `status` alone is only 4
+    coarse buckets, and members sharing one used to just show in whatever order they happened to
+    be enumerated in, never reflecting their actual relative standing. Falls back to the
+    single-value display only when literally nobody has any registered threat on the unit. See
+    "v0.7.0"/"v1.1.0" in §13 for the full rationale.
     - **When `listCount == 1`**: `soloListMode` ("My Threat" default, or "Top Threat") decides
       whether that one row is forced to be the player ("My Threat" — bypasses ranking entirely
       and just runs the single display) or whoever ranks #1 ("Top Threat" — might not be you).
@@ -1023,6 +1039,65 @@ per-row loop now resolves `name`/`nr,ng,nb`/`isTanking` before calling
 `UnitDetailedThreatSituation` for that row. Left as an open question in infos.md: whether this
 taint could also leak *across* nameplates processed in the same `OnUpdate` tick, which would need
 a bigger fix (restructuring the update loop) — not confirmed yet either way.
+
+### v1.1.0: Threat Differential display format + player list sort tiebreak
+
+Two requests together: a new "Threat Differential" display option, and a fix for the player
+list not consistently ordering members by threat.
+
+**Threat Differential** (`displayFormat == 4`): shows only your own standing, framed as a
+comparison — how far ahead of the #2 threat holder you are while tanking, or (per the original
+ask) how far behind the top threat holder you are while not. Investigated what Blizzard's own
+API actually offers for this before implementing (see infos.md): there's a dedicated,
+already-computed lead percentage for the tanking case
+(`UnitThreatPercentageOfLead("player", unitToken)`, the exact function Blizzard's own built-in
+`threatShowNumeric` numeric threat indicator uses while tanking), but **no equivalent
+already-computed "how far behind" number for the not-tanking case** — only `rawPercentage`
+(`UnitDetailedThreatSituation`'s 4th return, your threat as a percentage of the leader's), which
+Blizzard's own indicator uses as-is for that case too. Addon code can't turn `rawPercentage`
+into a literal subtracted gap (`100 - rawPercentage`) itself, because that's arithmetic on a
+value that can be secret, which throws the same way a raw comparison does. **Implemented
+faithfully rather than fabricating a number**: tanking shows `+N%` (a true lead percentage);
+not tanking shows `N% of lead` (your percentage of the leader's threat, honestly labeled as a
+ratio rather than invented as a gap it isn't). Flagged this limitation to the user rather than
+silently shipping a "-N%" that would have been calculated wrong.
+
+Deciding which branch to use hit the same secret-boolean problem `ApplyExactThreatPercentage`
+already works around for coloring: `UnitDetailedThreatSituation`'s own `isTanking` return can be
+secret, and a bare `if isTanking then` throws on one. Unlike the color case, there's no
+`EvaluateColorValueFromBoolean`-equivalent secret-safe select for picking between two *numbers*
+or deciding which *function* to call (checked the full `C_CurveUtil` function list — only the
+two color-returning `Evaluate*FromBoolean` functions exist). Worked around by branching on
+`status` instead (`UnitThreatSituation`'s separate, reliably-non-secret signal that the
+Low/Medium/High fallback already depends on) — once confirmed non-secret, `status >= 2` is a
+plain number comparison, immune to the taint mechanism entirely.
+
+Always forces the single display (`ApplyThreatDisplay`'s `useList` now also checks
+`displayFormat ~= 4`) regardless of `listMode`/`soloListMode`, since the feature is inherently
+about your own standing, not a list. The options panel hides every list-related control
+(`listMode`, `listCount`, `soloListMode`, `secondaryScale`, `listColorByClass`) while this
+format is selected, with a description explaining why, rather than leaving a checked `listMode`
+box that silently does nothing. `showOwner` stays visible in this case even if `listMode` is
+still checked, since the single display is what actually renders. The debug preview mirrors all
+of this, including a fake "lead over #2" number for its tanking-only preview case (the fake
+roster's "topMember" stand-in for "you" is always rank #1 by construction, so the preview can
+only ever exercise the tanking branch — an existing simplification of the debug design, not new
+here).
+
+**Player list sort tiebreak**: reported bug — with multiple players shown, members weren't
+reliably ordered by threat. Root cause: `CollectThreatRows` only ever sorted by `status` (0-3),
+a coarse 4-bucket signal; members sharing a bucket (very common — most non-tanks sit at 0) kept
+whatever order `IterateGroupMembers` happened to produce (effectively fixed raid-index order),
+never reflecting their actual relative standing. **Fix**: added `scaledPercentage` as a tiebreak
+within equal-status members, only ever compared through a `Readable()` (`issecretvalue`-guarded)
+check so an unreadable percentage at sort time just leaves that pair's relative order
+unchanged (no worse than before) rather than throwing. Restructured into two passes rather than
+fetching `scaledPercentage` inline in the original status-collecting loop: once
+`UnitDetailedThreatSituation` (secret-returning) runs for one member, the v1.0.2 taint-
+propagation finding means even a *later, unrelated* plain `if` check for a *different* member in
+that same loop could start throwing too — so every plain `UnitExists`/`Readable(status)` check
+across every member now completes in its own first pass, before the second pass fetches
+percentages for tiebreaking at all.
 
 ### Default values (v2 base defaults, not SavedVariables)
 

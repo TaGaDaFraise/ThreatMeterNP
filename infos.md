@@ -496,6 +496,50 @@ restructuring (e.g. each nameplate's update scheduled as its own fresh top-level
 checking the error's `unitToken` against *which* nameplate actually had threat data if this
 recurs, now that per-function reordering is in place.
 
+### "Threat Differential" research (v1.1.0): no secret-safe select for numbers, only colors
+
+Needed to decide, in addon code, which of two values/functions to use depending on whether the
+player is currently tanking a unit — but `UnitDetailedThreatSituation`'s own `isTanking` return
+can itself be secret, and a bare `if isTanking then` throws on one (same family of error as
+everything else in this file). Checked the full function list of `C_CurveUtil` (the namespace
+`EvaluateColorValueFromBoolean` already used for coloring lives in) for a generic equivalent —
+there isn't one. Every `Evaluate*FromBoolean` function in that namespace
+(`EvaluateColorFromBoolean`, `EvaluateColorValueFromBoolean`) returns a **color** value
+specifically; there's no `EvaluateValueFromBoolean` or similar for picking between two plain
+numbers, or for deciding which of two *functions* to call, based on a possibly-secret boolean.
+Also checked for any generically-named `Evaluate*` function elsewhere in the whole API dump —
+nothing broader than the duration/health-percent-specific ones already unrelated to this.
+
+**Workaround used**: branch on `status` (`UnitThreatSituation`'s separate 0-3 signal) instead of
+`isTanking`. `status` has consistently been the one "reliably non-secret" signal throughout this
+whole project (it's what the Low/Medium/High fallback and the player-list ranking already lean
+on) — once confirmed non-secret via `issecretvalue()`, deriving a boolean from it
+(`status >= 2`, matching the existing `THREAT_STEPS`/tanking-color bucketing) is a plain number
+comparison, completely immune to the taint mechanism regardless of what else has happened in
+that execution. This is the general pattern for "I need to branch on tanking state in addon
+code, not just color by it": prefer `status`-derived booleans over `isTanking` directly,
+everywhere, not just for color.
+
+**`UnitThreatPercentageOfLead(unit, mobGUID)`**: confirmed (via `Blizzard_UnitFrame\Mainline\UnitFrame.lua`'s
+`UnitFrame_UpdateThreatIndicator`, already noted above under "threatShowNumeric") to be the
+function Blizzard's own built-in numeric threat indicator uses specifically for the *tanking*
+case — an already-computed percentage lead over the #2 threat holder, needing only a single
+two-unit call, no group iteration. Returns are `Nilable = true` per
+`UnitDocumentation.lua` — guard with `type(value) ~= "number"` (not `issecretvalue()`, which
+would itself be fine to call but doesn't test for nil) before handing it to a widget sink, same
+as every other value from this API family.
+
+**No equivalent exists for "how far behind" while not tanking.** Blizzard's own indicator uses
+`rawPercentage` (`UnitDetailedThreatSituation`'s 4th return) as-is for that case — not a
+subtracted gap, just your own percentage of the leader's threat, displayed directly. There is no
+Blizzard function that hands back an already-computed "distance from the leader" number for the
+not-tanking case, and addon code cannot compute one itself: `100 - rawPercentage` is arithmetic
+on a value that can be secret, which throws exactly like a raw comparison would. Any future
+attempt at a true "-N%" gap display for the not-tanking case would need either a not-yet-found
+Blizzard API, or accepting that it's genuinely not possible under the current secret-value
+system — don't spend more time trying to compute it client-side, that avenue is dead on this
+client's secret-value model.
+
 ## Open questions / not yet scanned
 - Exact structure of `plate.unitFrame` when Plater is active vs. default Blizzard nameplates
   vs. ElvUI nameplates (requirements.md says "add info to existing nameplates (Blizzard,

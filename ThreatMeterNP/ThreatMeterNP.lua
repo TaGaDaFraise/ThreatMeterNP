@@ -128,9 +128,40 @@ local function ApplyExactThreatPercentage(text, unitToken)
     -- on the very next `if` that touches it. See infos.md.
     local format = GetDisplayFormat()
     local prefix = GetThreatOwnerPrefix(unitToken)
-    local isTanking, status, pct, _, rawThreat = UnitDetailedThreatSituation("player", unitToken)
+    local isTanking, status, pct, rawPct, rawThreat = UnitDetailedThreatSituation("player", unitToken)
 
-    if format == 1 then
+    if format == 4 then
+        -- "Threat Differential": your standing relative to the relevant
+        -- comparison point, not an absolute value. Mirrors Blizzard's
+        -- own built-in numeric threat indicator (UnitFrame.lua
+        -- UnitFrame_UpdateThreatIndicator, see infos.md), which picks
+        -- between the same two values the same way. Can't branch on
+        -- `isTanking` above directly — it can be secret, and a bare
+        -- `if` on a secret boolean throws — so this uses `status`
+        -- instead (guarded below), the same "reliably non-secret"
+        -- signal the Low/Medium/High fallback already depends on; once
+        -- confirmed non-secret, comparing it (status >= 2) is an
+        -- ordinary number comparison, safe regardless of taint.
+        if type(status) ~= "number" or issecretvalue(status) then return false end
+        if status >= 2 then
+            -- Tanking: a true lead percentage over the #2 threat
+            -- holder, already computed engine-side.
+            local leadPct = UnitThreatPercentageOfLead("player", unitToken)
+            if type(leadPct) ~= "number" then return false end
+            text:SetFormattedText("%s+%.0f%%", prefix, leadPct)
+        else
+            -- Not tanking: rawPercentage (your threat as a percentage
+            -- of the current leader's) is the closest available
+            -- Blizzard-provided proxy for "how far behind" — there's no
+            -- API that hands back an already-computed gap number here,
+            -- and addon code can't compute one itself (100 - rawPct
+            -- would be arithmetic on a possibly-secret value, which
+            -- throws). Labeled "of lead" rather than invented as a
+            -- fabricated "-N%" gap.
+            if type(rawPct) ~= "number" then return false end
+            text:SetFormattedText("%s%.0f%% of lead", prefix, rawPct)
+        end
+    elseif format == 1 then
         if type(rawThreat) ~= "number" then return false end
         text:SetFormattedText("%s%.0f", prefix, rawThreat)
     elseif format == 3 then
@@ -370,8 +401,8 @@ local function IterateGroupMembers()
 end
 
 -- Collects one row per group member with any threat registered on
--- unitToken, ranked by UnitThreatSituation's status (0-3) rather than
--- raw threat magnitude.
+-- unitToken, ranked by UnitThreatSituation's status (0-3) first, then by
+-- scaledPercentage as a tiebreak within members sharing the same status.
 --
 -- v0.6.x used raw threat for ranking (EllesmereUI's own pattern), which
 -- in practice always came back secret for every member on this client —
@@ -384,6 +415,21 @@ end
 -- special handling needed there, unlike the per-row *value*, which is
 -- still shown via the widget-sink technique (see ApplyThreatList) since
 -- it can be secret even when status isn't.
+--
+-- `status` alone is only 4 coarse buckets, though — members sharing one
+-- (very common; most non-tanks sit at 0) used to just keep whatever
+-- order IterateGroupMembers happened to produce (effectively raid-index
+-- order), never actually reflecting their relative standing. Fixed by
+-- fetching each row's scaledPercentage too, as a tiebreak.
+--
+-- Split into two passes rather than fetching scaledPercentage inline in
+-- the loop above: UnitDetailedThreatSituation returns secret values,
+-- and once one of those is introduced into an execution, even later
+-- *unrelated* plain `if` checks in that same execution can start
+-- throwing too (the taint-propagation bug fixed in v1.0.2 — see
+-- infos.md) — so every plain UnitExists/Readable(status) check across
+-- every member has to run to completion first, in its own pass, before
+-- any secret-returning call happens at all.
 local function CollectThreatRows(unitToken)
     local rows = {}
     for member in IterateGroupMembers() do
@@ -394,7 +440,25 @@ local function CollectThreatRows(unitToken)
             end
         end
     end
-    table.sort(rows, function(a, b) return a.status > b.status end)
+
+    -- Second pass: safe now that every plain check above is done. Only
+    -- ever stored here, never tested directly — table.sort's comparator
+    -- below reads it exclusively through Readable() (issecretvalue-
+    -- guarded), which is always safe regardless of taint.
+    for _, row in ipairs(rows) do
+        local _, _, scaledPercentage = UnitDetailedThreatSituation(row.unit, unitToken)
+        row.pct = scaledPercentage
+    end
+
+    table.sort(rows, function(a, b)
+        if a.status ~= b.status then
+            return a.status > b.status
+        end
+        if Readable(a.pct) and Readable(b.pct) then
+            return a.pct > b.pct
+        end
+        return false
+    end)
     return rows
 end
 
@@ -538,7 +602,12 @@ end
 local function ApplyThreatDisplay(widgets, plate, unitToken)
     local profile = ThreatMeterNP.db.profile.threat
 
-    local useList = profile.listMode and not (profile.listCount == 1 and profile.soloListMode == "mine")
+    -- "Threat Differential" (displayFormat 4) always shows just your
+    -- own standing (see ApplyExactThreatPercentage) — forces the single
+    -- display regardless of listMode/soloListMode, same as Options.lua
+    -- hiding the list controls while this format is selected.
+    local useList = profile.displayFormat ~= 4
+        and profile.listMode and not (profile.listCount == 1 and profile.soloListMode == "mine")
     if useList then
         local ok, first, last = ApplyThreatList(widgets, plate, unitToken)
         if ok then
@@ -646,7 +715,9 @@ local function RenderDebugPreview(plate)
         local format = GetDisplayFormat()
         local first, last
 
-        if tprofile.listMode then
+        -- Mirrors ApplyThreatDisplay's own override: Threat Differential
+        -- always forces the single display, even in the preview.
+        if tprofile.listMode and format ~= 4 then
             local wanted = tprofile.listCount or 3
             local previousRow = nil
             for i = 1, math.min(wanted, #sorted) do
@@ -668,7 +739,16 @@ local function RenderDebugPreview(plate)
             HideListRows(widgets)
             local prefix = tprofile.showOwner and (topMember.name .. ": ") or ""
             local valueFormat, a1, a2
-            if format == 1 then
+            if format == 4 then
+                -- Debug preview always stands in for "you" via whichever
+                -- fake member ranks #1 (topMember, by construction) —
+                -- so there's no fake scenario where "you" aren't tanking
+                -- here; shows the lead over #2 using plain (never
+                -- secret) fake numbers, same framing as the real
+                -- tanking branch in ApplyExactThreatPercentage.
+                local second = sorted[2]
+                valueFormat, a1 = "+%.0f%%", second and (topMember.scaled - second.scaled) or topMember.scaled
+            elseif format == 1 then
                 valueFormat, a1 = "%.0f", topMember.raw
             elseif format == 3 then
                 valueFormat, a1, a2 = "%.0f - %.0f%%", topMember.raw, topMember.scaled
