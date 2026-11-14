@@ -417,6 +417,14 @@ Practical implication for future work on this addon: don't assume a value is unc
 secret just because it was secret once in testing — the right pattern is always "attempt
 read → `issecretvalue()` guard → skip/fallback," never "assume secret and avoid the attempt."
 
+**Exercised for real arithmetic, not just comparison, in v1.2.0**: "Threat Differential" needed
+an actual *subtraction* (`myRaw - otherRaw`), not just a `>` comparison for ranking — same rule
+applies identically (guard both operands with `Readable()` first, only subtract once both pass),
+and it worked. This is the original "threat gap" concept from this project's very first
+concept/scope sections (§4, §10 in requirements.md) finally working, nearly the whole project
+later, once the guard-first pattern replaced the original unguarded attempt that started this
+whole "secret values" investigation in the first place.
+
 ### ElvUI's threat meter — confirms the fallback approach, not a new capability
 
 `ElvUI\Game\Shared\Modules\Nameplates\Elements\Threat.lua` doesn't fetch threat data itself —

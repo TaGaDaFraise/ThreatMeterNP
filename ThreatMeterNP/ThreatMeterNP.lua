@@ -106,6 +106,17 @@ local function GetThreatOwnerPrefix(unitToken)
     return name and (name .. ": ") or ""
 end
 
+-- Forward-declared: CollectThreatRows is defined further down (in the
+-- "Player list mode" section, it needs IterateGroupMembers right above
+-- it there), but ApplyExactThreatPercentage's Threat Differential
+-- branch below needs to call it too. A `local function` defined later
+-- in the chunk isn't yet an upvalue for code above it — same forward-
+-- reference gotcha already hit once in this file's history (see
+-- requirements.md §13 "v0.8.0"). Declaring the local here and assigning
+-- it (without a second `local`) at its usual definition site avoids
+-- moving that whole section out of the "Player list mode" grouping.
+local CollectThreatRows
+
 -- Preferred path: an exact threat value for the player's own threat,
 -- rendered via a *widget method* (FontString:SetFormattedText) rather
 -- than Lua's own string.format. Technique confirmed working on this
@@ -128,51 +139,72 @@ local function ApplyExactThreatPercentage(text, unitToken)
     -- on the very next `if` that touches it. See infos.md.
     local format = GetDisplayFormat()
     local prefix = GetThreatOwnerPrefix(unitToken)
-    local isTanking, status, pct, rawPct, rawThreat = UnitDetailedThreatSituation("player", unitToken)
 
     if format == 4 then
-        -- "Threat Differential": your absolute threat percentage
-        -- (scaledPercentage, same number "Percentage" mode shows)
-        -- alongside your standing relative to the relevant comparison
-        -- point. Mirrors Blizzard's own built-in numeric threat
-        -- indicator (UnitFrame.lua UnitFrame_UpdateThreatIndicator, see
-        -- infos.md) for the comparison half, which picks between the
-        -- same two values the same way. Can't branch on `isTanking`
-        -- above directly — it can be secret, and a bare `if` on a
-        -- secret boolean throws — so this uses `status` instead
-        -- (guarded below), the same "reliably non-secret" signal the
-        -- Low/Medium/High fallback already depends on; once confirmed
-        -- non-secret, comparing it (status >= 2) is an ordinary number
-        -- comparison, safe regardless of taint.
-        if type(status) ~= "number" or issecretvalue(status) then return false end
-        local hasAbs = type(pct) == "number"
-        if status >= 2 then
-            -- Tanking: a true lead percentage over the #2 threat
-            -- holder, already computed engine-side.
-            local leadPct = UnitThreatPercentageOfLead("player", unitToken)
-            if type(leadPct) ~= "number" then return false end
-            if hasAbs then
-                text:SetFormattedText("%s%.0f%% (+%.0f%% lead)", prefix, pct, leadPct)
-            else
-                text:SetFormattedText("%s+%.0f%%", prefix, leadPct)
-            end
-        else
-            -- Not tanking: rawPercentage (your threat as a percentage
-            -- of the current leader's) is the closest available
-            -- Blizzard-provided proxy for "how far behind" — there's no
-            -- API that hands back an already-computed gap number here,
-            -- and addon code can't compute one itself (100 - rawPct
-            -- would be arithmetic on a possibly-secret value, which
-            -- throws). Labeled "of lead" rather than invented as a
-            -- fabricated "-N%" gap.
-            if type(rawPct) ~= "number" then return false end
-            if hasAbs then
-                text:SetFormattedText("%s%.0f%% (%.0f%% of lead)", prefix, pct, rawPct)
-            else
-                text:SetFormattedText("%s%.0f%% of lead", prefix, rawPct)
+        -- "Threat Differential": the literal threat-point gap between
+        -- you and the relevant comparison unit — the current top
+        -- threat holder if that's not you, or whoever ranks #2 if it
+        -- is (treated as 0 if nobody else has any registered threat at
+        -- all, so you just see your own raw value, signed positive).
+        --
+        -- Uses the exact same per-unit fetch as the player list
+        -- (UnitDetailedThreatSituation per candidate, see
+        -- ApplyThreatList) for rawThreat on both sides, then computes a
+        -- real subtraction — only possible because both sides are
+        -- confirmed non-secret first via Readable() (the same
+        -- guard-then-compare pattern EllesmereUI's threat-list collector
+        -- uses, see infos.md "Correction": a secret value throws on
+        -- arithmetic, but a *confirmed non-secret* one compares/
+        -- computes completely normally). A secret rawThreat on either
+        -- side falls through to the Low/Medium/High fallback instead of
+        -- throwing. CollectThreatRows (ranked by status, then
+        -- percentage — see its own comment) decides who's "the relevant
+        -- comparison unit."
+        local rows = CollectThreatRows(unitToken)
+        local playerRank
+        for i, row in ipairs(rows) do
+            if row.unit == "player" then
+                playerRank = i
+                break
             end
         end
-    elseif format == 1 then
+        if not playerRank then return false end
+
+        local otherRow
+        if playerRank == 1 then
+            otherRow = rows[2]
+        else
+            otherRow = rows[1]
+        end
+
+        local _, _, _, _, myRaw = UnitDetailedThreatSituation("player", unitToken)
+        if not Readable(myRaw) then return false end
+
+        local otherRaw = 0
+        if otherRow then
+            local _, _, _, _, fetchedRaw = UnitDetailedThreatSituation(otherRow.unit, unitToken)
+            if not Readable(fetchedRaw) then return false end
+            otherRaw = fetchedRaw
+        end
+
+        local diff = myRaw - otherRaw
+        local sign = diff >= 0 and "+" or ""
+        text:SetFormattedText("%s%s%.0f", prefix, sign, diff)
+
+        -- Colored by the diff's own sign (a plain number we just
+        -- computed ourselves), not by status/isTanking — simpler than
+        -- every other branch here, and needs none of their secret-value
+        -- color workarounds, precisely because this value was never
+        -- secret to begin with by the time we reach this line.
+        local tprofile = ThreatMeterNP.db.profile.threat
+        local color = (diff >= 0) and tprofile.colorTanking or tprofile.colorNotTanking
+        text:SetTextColor(color[1], color[2], color[3])
+        return true
+    end
+
+    local isTanking, status, pct, _, rawThreat = UnitDetailedThreatSituation("player", unitToken)
+
+    if format == 1 then
         if type(rawThreat) ~= "number" then return false end
         text:SetFormattedText("%s%.0f", prefix, rawThreat)
     elseif format == 3 then
@@ -441,7 +473,11 @@ end
 -- infos.md) — so every plain UnitExists/Readable(status) check across
 -- every member has to run to completion first, in its own pass, before
 -- any secret-returning call happens at all.
-local function CollectThreatRows(unitToken)
+--
+-- Forward-declared (see the `local CollectThreatRows` above
+-- ApplyExactThreatPercentage) — no `local` keyword here, this assigns
+-- to that same upvalue rather than creating a new one.
+function CollectThreatRows(unitToken)
     local rows = {}
     for member in IterateGroupMembers() do
         if UnitExists(member) then
@@ -750,17 +786,24 @@ local function RenderDebugPreview(plate)
             HideListRows(widgets)
             local prefix = tprofile.showOwner and (topMember.name .. ": ") or ""
             local valueFormat, a1, a2
+            local valueColor = topMember.isTanking and tprofile.colorTanking or tprofile.colorNotTanking
             if format == 4 then
                 -- Debug preview always stands in for "you" via whichever
-                -- fake member ranks #1 (topMember, by construction) —
-                -- so there's no fake scenario where "you" aren't tanking
-                -- here; shows the absolute percentage plus the lead over
-                -- #2 using plain (never secret) fake numbers, same
-                -- framing as the real tanking branch in
-                -- ApplyExactThreatPercentage.
+                -- fake member ranks #1 by status (topMember, by
+                -- construction) — mirrors the real code's "compare
+                -- against #2" case; there's no fake scenario for the
+                -- "compare against #1" case, same existing
+                -- simplification the rest of this preview already has.
+                -- raw and status are rolled independently
+                -- (RollDebugRoster), so diff can still land negative
+                -- here even though topMember ranks #1 by status — same
+                -- as how status-rank and raw-value-rank can genuinely
+                -- diverge for real group members (the whole reason the
+                -- real player list needed a tiebreak, v1.1.0).
                 local second = sorted[2]
-                local lead = second and (topMember.scaled - second.scaled) or topMember.scaled
-                valueFormat, a1, a2 = "%.0f%% (+%.0f%% lead)", topMember.scaled, lead
+                local diff = topMember.raw - (second and second.raw or 0)
+                valueFormat, a1 = (diff >= 0 and "+%.0f" or "%.0f"), diff
+                valueColor = (diff >= 0) and tprofile.colorTanking or tprofile.colorNotTanking
             elseif format == 1 then
                 valueFormat, a1 = "%.0f", topMember.raw
             elseif format == 3 then
@@ -769,7 +812,6 @@ local function RenderDebugPreview(plate)
                 valueFormat, a1 = "%.0f%%", topMember.scaled
             end
             widgets.threatText:SetFormattedText(prefix .. valueFormat, a1, a2)
-            local valueColor = topMember.isTanking and tprofile.colorTanking or tprofile.colorNotTanking
             widgets.threatText:SetTextColor(valueColor[1], valueColor[2], valueColor[3])
             widgets.threatText:Show()
             first, last = widgets.threatText, widgets.threatText

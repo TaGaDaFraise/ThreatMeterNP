@@ -13,7 +13,7 @@ Plater, and ElvUI** without needing a different version for each.
 
 ## Status
 
-**v1.1.1.** All features validated in-game, including exact threat
+**v1.2.0.** All features validated in-game, including exact threat
 percentages and the player threat list (renamed from ThreatWatch at v0.9.1 — a one-time
 settings migration ran then and has since been removed, see
 [requirements.md](requirements.md)). See [requirements.md](requirements.md) for the full spec
@@ -27,7 +27,7 @@ and [infos.md](infos.md) for the WoW API research behind the implementation.
 | Threat | Your own threat on the unit, in a configurable format — Numeric, Percentage, both, or a Threat Differential (your standing vs. the top/#2 threat holder) — falling back to a fixed **Low**/**Medium**/**High** indicator (green→yellow→red, same scale for tanks and DPS) only on the rare unit where no exact value is available at all (toggle on/off entirely) | Enemy nameplates only |
 
 - Per-label position (X/Y), text alignment (Left/Middle/Right — which edge of the text sits at the offset), font (from [LibSharedMedia](https://www.curseforge.com/wow/addons/libsharedmedia-3-0)), font size, and color — target-of-target has one color (or "color by class" — colors the name by the targeted player's class, falling back to the plain color for NPCs), threat has separate colors for "tanking" vs "not tanking".
-- **Threat display format**: Numeric, Percentage, Numeric - Percentage, or **Threat Differential** — applies everywhere threat is shown. Threat Differential always shows just your own standing: your absolute threat percentage plus how far ahead/behind you are (e.g. `73% (+42% lead)` while tanking, `48% (52% of lead)` while not), forcing the single display regardless of the player list setting below.
+- **Threat display format**: Numeric, Percentage, Numeric - Percentage, or **Threat Differential** — applies everywhere threat is shown. Threat Differential always shows just your own standing: a plain signed raw-threat number, you minus the top/#2 threat holder (e.g. `+1240` or `-830`, 0 on the other side if nobody else has any), colored tanking/not-tanking by its own sign — forcing the single display regardless of the player list setting below.
 - **Display threat owner**: prefixes the single threat display with who currently has aggro (`Bob: 87%`, or `You: 87%`) — works unconditionally since it reuses the target-of-target lookup rather than threat-table ranking.
 - **Player list mode**: instead of just your own threat, show 1-3 (slider) group/raid members ranked by threat status (then by threat percentage as a tiebreak), each with name (optionally class-colored) and value. Degrades gracefully to fewer rows if fewer members have any registered threat — see "How it works."
   - **When showing 1 player**: choose "My Threat" (always you — the default) or "Top Threat" (whoever currently ranks #1, which might not be you).

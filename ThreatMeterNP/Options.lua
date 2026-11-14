@@ -249,9 +249,10 @@ local function LabelOptions(order, name, prefix, includeThreatColors, includeCol
             width = displayFormatWidth, relWidth = displayFormatRel,
             order = nextOrder(),
             desc = "\"Threat Differential\" always shows just your own standing (ignoring the " ..
-                "player-list options below): your threat percentage plus how far ahead of #2 " ..
-                "you are while tanking, or how close you are to the current leader while not " ..
-                "(e.g. \"73% (+42% lead)\" or \"48% (52% of lead)\").",
+                "player-list options below): the raw threat-point gap between you and the top " ..
+                "threat holder, or whoever ranks #2 if that's you — a plain signed number " ..
+                "(e.g. \"+1240\" or \"-830\"), colored tanking/not-tanking by its own sign. Only " ..
+                "shows when the game currently exposes both sides' raw threat to add-ons.",
             values = { [1] = "Numeric", [2] = "Percentage", [3] = "Numeric - Percentage", [4] = "Threat Differential" },
             get = ValueGet({ prefix, "displayFormat" }), set = ValueSet({ prefix, "displayFormat" }),
         }

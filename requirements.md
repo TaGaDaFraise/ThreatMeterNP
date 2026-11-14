@@ -33,7 +33,7 @@ still say `_classic_beta_` since they're a historical record of when/how that wa
 live config value — don't "fix" those to match, update the deploy script again if the path moves
 once more.
 
-**Version**: 1.1.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.2.0. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -50,7 +50,10 @@ unrelated calls in the same execution was fixed in `GetThreatOwnerPrefix`'s call
 v1.0.2). v1.1.0 adds a 4th display format, **Threat Differential** (your own standing vs. the
 relevant comparison point, forcing single display), and fixes the player list's sort to use
 threat percentage as a tiebreak within members sharing the same coarse status (§13 v1.1.0).
-v1.1.1 adds your absolute threat percentage alongside the differential figure (§13 v1.1.1).
+v1.1.1 added your absolute threat percentage alongside the differential figure, then v1.2.0
+replaced the whole text-based differential with a plain signed raw-threat number (your threat
+minus the top/#2 threat holder's, 0 if nobody else has any), colored by its own sign (§13
+v1.2.0) — the text-based version from v1.1.0/v1.1.1 no longer exists.
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
@@ -73,15 +76,16 @@ v1.1.1 adds your absolute threat percentage alongside the differential figure (�
     whoever currently has aggro (`"Bob: 87%"`, or `"You: 87%"`) — reuses the target-of-target
     lookup (mob's current target = aggro holder), not threat-table ranking, so it works
     unconditionally.
-    - **Threat Differential** (`displayFormat == 4`, added v1.1.0): shows only your own
-      standing — your absolute threat percentage (`scaledPercentage`, same number "Percentage"
-      mode shows) plus a comparison figure, e.g. `"73% (+42% lead)"` while tanking
-      (`UnitThreatPercentageOfLead`'s lead over #2), or `"48% (52% of lead)"` while not (your
-      threat as a percentage of the current leader's, `rawPercentage`) — added v1.1.1 after the
-      first cut showed only the comparison figure, per request. Always forces the single
-      display, overriding `listMode`/`soloListMode` (which the options panel then hides, with a
-      note explaining why) — see "v1.1.0"/"v1.1.1" in §13 for why the "not tanking" case can't
-      be a literal subtracted gap number.
+    - **Threat Differential** (`displayFormat == 4`, added v1.1.0, reworked v1.2.0): shows only
+      your own standing — a plain signed **raw threat-point** number: your `rawThreat` minus the
+      current top threat holder's (or whoever ranks #2's, if that top holder is you; 0 if nobody
+      else has any registered threat at all), e.g. `+1240` or `-830`. Colored tanking/not-tanking
+      by the number's own sign, not by the unit's `isTanking`/`status`. Uses the exact same
+      per-unit `UnitDetailedThreatSituation` fetch the player list already uses, and only
+      computes the subtraction once both sides are confirmed non-secret — see "v1.2.0" in §13
+      for why that guard is what makes this safe where the original raw-threat-gap attempt
+      (v0.1-v0.6) wasn't. Always forces the single display, overriding `listMode`/
+      `soloListMode` (which the options panel then hides, with a note explaining why).
   - **List**: instead of just the player, shows 1-3 (`listCount`, slider) group/raid members,
     each with name (optionally class-colored — `listColorByClass`) and value in the same
     display-format setting (except Threat Differential, which forces single display instead —
@@ -1113,6 +1117,52 @@ percentage happens to be unavailable at that moment (`type(pct) ~= "number"`), r
 hiding the whole display over a missing secondary number. `RenderDebugPreview`'s fake-data
 preview updated to match (`"%.0f%% (+%.0f%% lead)"`, using the fake roster's `topMember.scaled`
 for the absolute half).
+
+### v1.2.0: Threat Differential replaced entirely — plain signed raw-threat number, no text
+
+Follow-up request: drop the text-based framing from v1.1.0/v1.1.1 (`"+42% lead"`, `"52% of
+lead"`) entirely. Instead: use the exact same per-unit fetching mechanism the player list uses
+(`UnitDetailedThreatSituation` per candidate unit, see `ApplyThreatList`), then compute the
+literal threat-point difference between the player and whoever's "the top threat holder beside
+them" — the current #1 if that's not the player, or whoever ranks #2 if the player *is* #1.
+Display just that signed number, prefixed `+` if the player is above (colored `colorTanking`)
+or left with the natural `-` if below (colored `colorNotTanking`). While working through it, the
+user added: if there's no one else to compare against at all (solo, or no other registered
+threat), treat the other side as 0 rather than hiding the display — so a lone player just sees
+their own raw value, always signed positive.
+
+This is the original "threat gap" concept from the very start of this project (§4, §10's
+WeakAura reference — literally `threatValue - secondThreat`/`threatValue - firstThreat`), which
+v0.1-v0.6's history abandoned after raw-threat comparison kept throwing on secret values. What
+makes it viable now: the "Correction" principle already established in infos.md (a value that's
+*confirmed non-secret* at a given moment compares/computes completely normally — only a *secret*
+value throws on arithmetic). So the new code never assumes anything about secrecy up front — it
+fetches both sides' `rawThreat`, guards each independently with `Readable()`
+(`issecretvalue()`-based, same as `CollectThreatRows`'s own tiebreak), and only subtracts once
+both have passed that guard. If either side comes back secret at that moment, the display falls
+through to the existing Low/Medium/High fallback instead of throwing or showing something wrong
+— graceful degradation, not a guarantee this will always have data to show.
+
+Finding "who's the top threat holder beside them" reuses `CollectThreatRows` (already ranked by
+status, then percentage, per v1.1.0) — hence the forward-declaration added right before
+`ApplyExactThreatPercentage` (`local CollectThreatRows`, assigned without a second `local`
+keyword at its usual definition site further down): `CollectThreatRows` is defined in the
+"Player list mode" section, well after `ApplyExactThreatPercentage`, and Lua doesn't make a
+`local function` defined later in a chunk available as an upvalue to code written earlier — the
+exact forward-reference gotcha already documented once in this file (see "v0.8.0" above).
+
+Also notably simpler than every other display format here: since the differential's color is
+based on a number *the addon itself just computed and knows the sign of* (not a Blizzard-secret
+`isTanking`/`status`), it needs none of the `EvaluateColorValueFromBoolean`/`status`-guard
+machinery every other branch's coloring does — colored by a plain `diff >= 0` check, nothing
+more.
+
+`RenderDebugPreview`'s fake-data preview updated to match, including a realistic wrinkle: since
+`RollDebugRoster` rolls `status` and `raw` independently for each fake member, the fake "you"
+stand-in (`topMember`, always rank #1 by *status* by construction) can still end up with a
+*lower* raw value than the fake member ranked #2 — so the debug preview's diff can genuinely go
+negative too, exactly mirroring why the real player list needed the v1.1.0 tiebreak in the first
+place (status-rank and raw-value-rank aren't the same thing).
 
 ### Default values (v2 base defaults, not SavedVariables)
 
