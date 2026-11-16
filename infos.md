@@ -417,13 +417,38 @@ Practical implication for future work on this addon: don't assume a value is unc
 secret just because it was secret once in testing — the right pattern is always "attempt
 read → `issecretvalue()` guard → skip/fallback," never "assume secret and avoid the attempt."
 
-**Exercised for real arithmetic, not just comparison, in v1.2.0**: "Threat Differential" needed
-an actual *subtraction* (`myRaw - otherRaw`), not just a `>` comparison for ranking — same rule
-applies identically (guard both operands with `Readable()` first, only subtract once both pass),
-and it worked. This is the original "threat gap" concept from this project's very first
-concept/scope sections (§4, §10 in requirements.md) finally working, nearly the whole project
-later, once the guard-first pattern replaced the original unguarded attempt that started this
-whole "secret values" investigation in the first place.
+**Attempted for real arithmetic, not just comparison, in v1.2.0 — confirmed NOT to work for the
+player's own query, unlike group-member ranking.** "Threat Differential" tried an actual
+*subtraction* (`myRaw - otherRaw`), guarding both operands with `Readable()` first same as the
+ranking case above. In theory, the same rule should apply identically. In practice, live
+testing showed it *never* produced a number — always fell back to Low/Medium/High. Root cause
+(see `UnitDocumentation.lua`): `SecretWhenUnitThreatValuesRestricted` is a **function-level**
+flag on `UnitDetailedThreatSituation`, not per-return-value — when active, it secrets that
+call's entire return set at once (`isTanking`, `status`, `scaledPercentage`, `rawPercentage`,
+`rawThreat` all together), and this project had *already* documented, repeatedly, since very
+early on, that `rawThreat` for the player's own query is secret "even solo, outside any
+instance" on this client. That evidence was sitting in this file the whole time; v1.2.0 didn't
+connect it before shipping.
+
+**Important distinction this surfaced, worth being precise about**: the player list showing
+real numbers for multiple units does NOT mean those values are `Readable()` — it displays them
+via the sink technique (handing the opaque value straight to `FontString:SetFormattedText`,
+"the actual breakthrough" above), which works regardless of secrecy, specifically because Lua
+never reads the number at all. *Reading* a value (to compare it, or subtract it from another)
+is a categorically different operation from *displaying* it via the sink, even though both
+produce "a number on the screen." Seeing real numbers in the list is not evidence that
+arithmetic on those same numbers would be safe.
+
+**Net conclusion**: the EllesmereUI "Correction" pattern (guard-then-compare/compute) is real
+and does work — for *group members*, where secrecy has been shown to be conditional/
+per-member. It has **not** been shown to work for the *player's own* `UnitDetailedThreatSituation`
+query specifically on this client, where the restriction appears unconditional. Don't assume
+success for one case transfers to the other. `UnitThreatSituation`'s separate `status` (0-3)
+remains the only signal confirmed reliably readable for the player's own query — see "v1.2.1" in
+requirements.md §13 for what Threat Differential uses instead (a tier difference, not a true
+point gap). This is the original "threat gap" concept from this project's very first
+concept/scope sections (§4, §10 in requirements.md), which is still, ultimately, not achievable
+as a true point value on this client — only approximable via status tiers.
 
 ### ElvUI's threat meter — confirms the fallback approach, not a new capability
 

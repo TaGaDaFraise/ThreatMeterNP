@@ -33,7 +33,7 @@ still say `_classic_beta_` since they're a historical record of when/how that wa
 live config value — don't "fix" those to match, update the deploy script again if the path moves
 once more.
 
-**Version**: 1.2.0. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.2.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -51,9 +51,13 @@ v1.0.2). v1.1.0 adds a 4th display format, **Threat Differential** (your own sta
 relevant comparison point, forcing single display), and fixes the player list's sort to use
 threat percentage as a tiebreak within members sharing the same coarse status (§13 v1.1.0).
 v1.1.1 added your absolute threat percentage alongside the differential figure, then v1.2.0
-replaced the whole text-based differential with a plain signed raw-threat number (your threat
-minus the top/#2 threat holder's, 0 if nobody else has any), colored by its own sign (§13
-v1.2.0) — the text-based version from v1.1.0/v1.1.1 no longer exists.
+replaced the whole text-based differential with a plain signed raw-threat number — which turned
+out to never actually work (confirmed live: always fell back to Low/Medium/High), because
+`UnitDetailedThreatSituation`'s secrecy flag covers its entire return set at once and has been
+unconditionally secret for the player's own query throughout this project's history. v1.2.1
+replaced it again, with a signed *tier* difference (0-3 scale, via the separately-reliable
+`UnitThreatSituation`) instead of a true point gap (§13 v1.2.1) — the text-based v1.1.0/v1.1.1
+version and the raw-point v1.2.0 version no longer exist.
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
@@ -76,15 +80,18 @@ v1.2.0) — the text-based version from v1.1.0/v1.1.1 no longer exists.
     whoever currently has aggro (`"Bob: 87%"`, or `"You: 87%"`) — reuses the target-of-target
     lookup (mob's current target = aggro holder), not threat-table ranking, so it works
     unconditionally.
-    - **Threat Differential** (`displayFormat == 4`, added v1.1.0, reworked v1.2.0): shows only
-      your own standing — a plain signed **raw threat-point** number: your `rawThreat` minus the
-      current top threat holder's (or whoever ranks #2's, if that top holder is you; 0 if nobody
-      else has any registered threat at all), e.g. `+1240` or `-830`. Colored tanking/not-tanking
-      by the number's own sign, not by the unit's `isTanking`/`status`. Uses the exact same
-      per-unit `UnitDetailedThreatSituation` fetch the player list already uses, and only
-      computes the subtraction once both sides are confirmed non-secret — see "v1.2.0" in §13
-      for why that guard is what makes this safe where the original raw-threat-gap attempt
-      (v0.1-v0.6) wasn't. Always forces the single display, overriding `listMode`/
+    - **Threat Differential** (`displayFormat == 4`, added v1.1.0, reworked v1.2.0, reworked
+      again v1.2.1): shows only your own standing — a plain signed **tier** number (0-3 scale,
+      via `UnitThreatSituation`'s `status`): your tier minus the current top threat holder's (or
+      whoever ranks #2's, if that top holder is you; tier 0 if nobody else has any registered
+      threat at all), e.g. `+2` or `-1`. Colored tanking/not-tanking by the number's own sign.
+      **Not a true threat-point gap** — v1.2.0 tried that via `rawThreat` and confirmed live it
+      never works, because `UnitDetailedThreatSituation`'s secrecy flag covers its whole return
+      set at once and has been unconditionally secret for the player's own query throughout this
+      project's history; `status` from the separate, simpler `UnitThreatSituation` call is the
+      one signal that's actually reliably readable, which is also why the Low/Medium/High
+      fallback itself is built on it. See "v1.2.0"/"v1.2.1" in §13 for the full story. Always
+      forces the single display, overriding `listMode`/
       `soloListMode` (which the options panel then hides, with a note explaining why).
   - **List**: instead of just the player, shows 1-3 (`listCount`, slider) group/raid members,
     each with name (optionally class-colored — `listColorByClass`) and value in the same
@@ -1163,6 +1170,45 @@ stand-in (`topMember`, always rank #1 by *status* by construction) can still end
 *lower* raw value than the fake member ranked #2 — so the debug preview's diff can genuinely go
 negative too, exactly mirroring why the real player list needed the v1.1.0 tiebreak in the first
 place (status-rank and raw-value-rank aren't the same thing).
+
+### v1.2.1: fix — v1.2.0's raw-threat differential never actually worked; switched to a tier number
+
+Reported by the user immediately after v1.2.0 shipped: "it is not working, I always seem 'high'
+'low', no actual number" — i.e. `ApplyExactThreatPercentage`'s `format == 4` branch was always
+returning `false`, always falling through to the Low/Medium/High fallback, never showing the new
+differential number at all.
+
+**Root cause**: `UnitDetailedThreatSituation`'s `SecretWhenUnitThreatValuesRestricted` flag (per
+`UnitDocumentation.lua`) is a *function-level* flag, not per-return-value — when it's active,
+all five of that function's returns (`isTanking`, `status`, `scaledPercentage`,
+`rawPercentage`, `rawThreat`) come back secret together, not independently. infos.md had
+already documented, repeatedly, since very early in this project, that `rawThreat` for the
+player's own query comes back secret "even solo, outside any instance" on this client — v1.2.0's
+`Readable(myRaw)` guard was therefore *always* going to fail, not just sometimes. This should
+have been caught before shipping v1.2.0, since the evidence was already sitting in this file;
+didn't connect it to the new code at the time.
+
+The user asked a sharp follow-up before any fix went in: if the player list can show real
+numbers for multiple players, why can't the same mechanism produce a subtracted difference?
+Worth spelling out the distinction precisely, since it's genuinely counterintuitive and the
+answer: the player list's numbers reach the screen via the **sink technique**
+(`FontString:SetFormattedText`, see "the actual breakthrough" above) — Lua hands over an opaque
+secret-wrapped value and the widget renders it C-side, *without Lua ever reading the number*.
+That's categorically different from computing a *new* value (a subtraction) from two existing
+ones, which requires Lua to actually read both operands — exactly what the secrecy system
+blocks. Displaying a value and deriving a value from it are not the same operation under this
+system, even though both end up looking like "a number on screen."
+
+**Fix**: replaced the whole `rawThreat`-based subtraction with a **tier difference** using
+`UnitThreatSituation`'s separate `status` (0-3) instead — the one signal this entire addon has
+reliably been able to *read* (not just sink-display) throughout its whole history, and
+literally what the Low/Medium/High fallback itself already runs on. `CollectThreatRows` already
+guarantees every row's `status` passed a `Readable()` check as its inclusion criterion, so the
+new code reuses `rows[playerRank].status`/`otherRow.status` directly with no additional guard
+or API call needed — simpler than v1.2.0's version, not just more likely to actually work.
+Coarser than a true point gap (range is only -3..+3), but it's a real number that will actually
+display, which v1.2.0 never did. `RenderDebugPreview` updated to match (`topMember.status -
+second.status`, using the fake roster's already-rolled `status` field instead of `raw`).
 
 ### Default values (v2 base defaults, not SavedVariables)
 

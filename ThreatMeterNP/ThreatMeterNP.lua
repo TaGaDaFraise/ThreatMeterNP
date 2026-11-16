@@ -141,25 +141,29 @@ local function ApplyExactThreatPercentage(text, unitToken)
     local prefix = GetThreatOwnerPrefix(unitToken)
 
     if format == 4 then
-        -- "Threat Differential": the literal threat-point gap between
-        -- you and the relevant comparison unit — the current top
-        -- threat holder if that's not you, or whoever ranks #2 if it
-        -- is (treated as 0 if nobody else has any registered threat at
-        -- all, so you just see your own raw value, signed positive).
+        -- "Threat Differential": a signed tier difference between you
+        -- and the relevant comparison unit — the current top threat
+        -- holder if that's not you, or whoever ranks #2 if it is
+        -- (treated as tier 0 if nobody else has any registered threat
+        -- at all, so you just see your own tier, signed positive).
         --
-        -- Uses the exact same per-unit fetch as the player list
-        -- (UnitDetailedThreatSituation per candidate, see
-        -- ApplyThreatList) for rawThreat on both sides, then computes a
-        -- real subtraction — only possible because both sides are
-        -- confirmed non-secret first via Readable() (the same
-        -- guard-then-compare pattern EllesmereUI's threat-list collector
-        -- uses, see infos.md "Correction": a secret value throws on
-        -- arithmetic, but a *confirmed non-secret* one compares/
-        -- computes completely normally). A secret rawThreat on either
-        -- side falls through to the Low/Medium/High fallback instead of
-        -- throwing. CollectThreatRows (ranked by status, then
-        -- percentage — see its own comment) decides who's "the relevant
-        -- comparison unit."
+        -- First attempt (v1.2.0) tried a literal rawThreat subtraction,
+        -- confirmed live to never work: UnitDetailedThreatSituation's
+        -- `SecretWhenUnitThreatValuesRestricted` flag covers its whole
+        -- return set at once (not per-value), and every return from it
+        -- has been unconditionally secret for the player's own query
+        -- throughout this project's history — so the subtraction's
+        -- Readable() guard always failed, always falling through to
+        -- Low/Medium/High. See infos.md.
+        --
+        -- UnitThreatSituation's separate `status` (0-3) is the one
+        -- signal that actually is reliably readable (confirmed
+        -- throughout this whole addon — it's what the Low/Medium/High
+        -- fallback itself runs on), so the "number" here is a tier
+        -- difference, not a true point gap. CollectThreatRows already
+        -- guarantees every row's `status` passed Readable() as its
+        -- inclusion test, so it's reused directly below with no further
+        -- guard needed.
         local rows = CollectThreatRows(unitToken)
         local playerRank
         for i, row in ipairs(rows) do
@@ -177,25 +181,17 @@ local function ApplyExactThreatPercentage(text, unitToken)
             otherRow = rows[1]
         end
 
-        local _, _, _, _, myRaw = UnitDetailedThreatSituation("player", unitToken)
-        if not Readable(myRaw) then return false end
-
-        local otherRaw = 0
-        if otherRow then
-            local _, _, _, _, fetchedRaw = UnitDetailedThreatSituation(otherRow.unit, unitToken)
-            if not Readable(fetchedRaw) then return false end
-            otherRaw = fetchedRaw
-        end
-
-        local diff = myRaw - otherRaw
+        local myStatus = rows[playerRank].status
+        local otherStatus = otherRow and otherRow.status or 0
+        local diff = myStatus - otherStatus
         local sign = diff >= 0 and "+" or ""
         text:SetFormattedText("%s%s%.0f", prefix, sign, diff)
 
         -- Colored by the diff's own sign (a plain number we just
-        -- computed ourselves), not by status/isTanking — simpler than
-        -- every other branch here, and needs none of their secret-value
-        -- color workarounds, precisely because this value was never
-        -- secret to begin with by the time we reach this line.
+        -- computed ourselves), not by status/isTanking directly —
+        -- simpler than every other branch here, and needs none of
+        -- their secret-value color workarounds, precisely because this
+        -- value was never secret to begin with.
         local tprofile = ThreatMeterNP.db.profile.threat
         local color = (diff >= 0) and tprofile.colorTanking or tprofile.colorNotTanking
         text:SetTextColor(color[1], color[2], color[3])
@@ -794,14 +790,11 @@ local function RenderDebugPreview(plate)
                 -- against #2" case; there's no fake scenario for the
                 -- "compare against #1" case, same existing
                 -- simplification the rest of this preview already has.
-                -- raw and status are rolled independently
-                -- (RollDebugRoster), so diff can still land negative
-                -- here even though topMember ranks #1 by status — same
-                -- as how status-rank and raw-value-rank can genuinely
-                -- diverge for real group members (the whole reason the
-                -- real player list needed a tiebreak, v1.1.0).
+                -- Uses status (the tier), matching the real formula —
+                -- see ApplyExactThreatPercentage for why this isn't a
+                -- raw-value gap.
                 local second = sorted[2]
-                local diff = topMember.raw - (second and second.raw or 0)
+                local diff = topMember.status - (second and second.status or 0)
                 valueFormat, a1 = (diff >= 0 and "+%.0f" or "%.0f"), diff
                 valueColor = (diff >= 0) and tprofile.colorTanking or tprofile.colorNotTanking
             elseif format == 1 then
