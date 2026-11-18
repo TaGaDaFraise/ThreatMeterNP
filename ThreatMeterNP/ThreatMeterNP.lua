@@ -129,16 +129,21 @@ local CollectThreatRows
 -- widget formats and renders it without ever exposing the value back
 -- to Lua. That's why pct/rawThreat are never touched by
 -- IsUsableNumber/issecretvalue here — only passed straight through.
-local function ApplyExactThreatPercentage(text, unitToken)
-    -- Order matters: GetThreatOwnerPrefix does plain UnitExists/UnitIsUnit
-    -- `if` checks, and those must run before UnitDetailedThreatSituation
-    -- below introduces secret values into this call's execution — once
-    -- that happens, the client taints the rest of the call, and even an
-    -- unrelated, otherwise-ordinary boolean result (UnitIsUnit comparing
-    -- two plain unit tokens) comes back wrapped as secret too, throwing
-    -- on the very next `if` that touches it. See infos.md.
+-- `prefix` is computed once by the caller (ApplyThreatSingle) and
+-- passed in, rather than this function calling GetThreatOwnerPrefix
+-- itself. GetThreatOwnerPrefix does plain UnitExists/UnitIsUnit `if`
+-- checks, which must run before ANY secret-returning call anywhere in
+-- this whole call chain — not just before the ones in this function.
+-- The Threat Differential branch below calls CollectThreatRows, which
+-- taints the execution; if that branch then fails and falls through to
+-- ApplyThreatLevelFallback, a GetThreatOwnerPrefix call made *there*
+-- would already be running tainted and throw, even though that
+-- function's own internal ordering is fine in isolation — confirmed
+-- live (see infos.md/requirements.md §13 "v1.2.2"). Computing the
+-- prefix once, before dispatching to either function, closes that off
+-- regardless of which path fails.
+local function ApplyExactThreatPercentage(text, unitToken, prefix)
     local format = GetDisplayFormat()
-    local prefix = GetThreatOwnerPrefix(unitToken)
 
     if format == 4 then
         -- "Threat Differential": a signed tier difference between you
@@ -254,14 +259,10 @@ local THREAT_STEPS = {
     [3] = { text = "High",   r = 1.0, g = 0.2, b = 0.2 }, -- tanking, securely
 }
 
-local function ApplyThreatLevelFallback(text, unitToken)
-    -- GetThreatOwnerPrefix first, same reasoning as
-    -- ApplyExactThreatPercentage: it does plain UnitExists/UnitIsUnit
-    -- `if` checks, which need to run before any threat-situation API
-    -- call below might taint this execution — even one, like
-    -- UnitThreatSituation here, whose result passed IsUsableNumber this
-    -- time. See infos.md.
-    local prefix = GetThreatOwnerPrefix(unitToken)
+-- `prefix` passed in by the caller — see the comment above
+-- ApplyExactThreatPercentage for why this function no longer calls
+-- GetThreatOwnerPrefix itself.
+local function ApplyThreatLevelFallback(text, unitToken, prefix)
     local status = UnitThreatSituation("player", unitToken)
     if not IsUsableNumber(status) then
         return false
@@ -512,12 +513,25 @@ end
 -- Single-value fallback chain shared by list mode's "nothing to rank"
 -- case and the "My Threat" solo-list choice — both just mean "render
 -- the ordinary single display into threatText."
+--
+-- GetThreatOwnerPrefix is computed exactly once here, before either
+-- branch below runs, and passed down as a parameter — not left for
+-- ApplyExactThreatPercentage/ApplyThreatLevelFallback to each call
+-- internally. It does a plain UnitExists/UnitIsUnit `if` check, which
+-- must run before ANY secret-returning call anywhere in this chain:
+-- ApplyExactThreatPercentage's Threat Differential branch calls
+-- CollectThreatRows (secret-returning) and can still fail afterward,
+-- falling through to ApplyThreatLevelFallback — a GetThreatOwnerPrefix
+-- call made there would already be running tainted and throw, even
+-- though each function's own internal ordering was already correct in
+-- isolation. Confirmed live — see requirements.md §13 "v1.2.2".
 local function ApplyThreatSingle(widgets, unitToken)
-    if ApplyExactThreatPercentage(widgets.threatText, unitToken) then
+    local prefix = GetThreatOwnerPrefix(unitToken)
+    if ApplyExactThreatPercentage(widgets.threatText, unitToken, prefix) then
         widgets.threatText:Show()
         return true
     end
-    if ApplyThreatLevelFallback(widgets.threatText, unitToken) then
+    if ApplyThreatLevelFallback(widgets.threatText, unitToken, prefix) then
         widgets.threatText:Show()
         return true
     end

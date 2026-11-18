@@ -585,6 +585,22 @@ restructuring (e.g. each nameplate's update scheduled as its own fresh top-level
 checking the error's `unitToken` against *which* nameplate actually had threat data if this
 recurs, now that per-function reordering is in place.
 
+**Recurred in v1.2.2, as a cross-*function* variant of the same rule, within one nameplate's own
+chain** (not evidence for or against the cross-nameplate question above — the error's
+`unitToken` was the only nameplate actually being processed at that point in that update, so
+this instance is fully explained without needing cross-nameplate taint at all). The per-function
+reordering fix (prefix before any secret-returning call, *within* a function) turned out to be
+necessary but not sufficient: `ApplyThreatSingle` calls `ApplyExactThreatPercentage` first, and
+if that function's Threat Differential branch calls `CollectThreatRows` (secret-returning) and
+*then* fails anyway, `ApplyThreatSingle` falls through to `ApplyThreatLevelFallback` — a
+*separate* function call, later in the same chain, whose own `GetThreatOwnerPrefix` call is now
+tainted by the earlier function's `CollectThreatRows`, despite that earlier function's own
+internal ordering having been correct in isolation. **The practical rule has to extend past "do
+plain checks first within this function" to "do plain checks first, once, before dispatching to
+*any* function that might run later in the same chain, including ones several calls away"** —
+fixed by hoisting the one `GetThreatOwnerPrefix` call up to `ApplyThreatSingle` and passing it
+down as a parameter, rather than letting each function compute it for itself.
+
 ### "Threat Differential" research (v1.1.0): no secret-safe select for numbers, only colors
 
 Needed to decide, in addon code, which of two values/functions to use depending on whether the

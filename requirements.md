@@ -33,7 +33,7 @@ still say `_classic_beta_` since they're a historical record of when/how that wa
 live config value — don't "fix" those to match, update the deploy script again if the path moves
 once more.
 
-**Version**: 1.2.1. Both v1 and v2 feature sets shipped and validated in-game by the user,
+**Version**: 1.2.2. Both v1 and v2 feature sets shipped and validated in-game by the user,
 including exact threat percentages and the player threat list. Renamed from ThreatWatch to
 ThreatMeterNP at v0.9.1 (see §13). Both `enabled` toggles (§13 v0.9.4/v0.9.5) check
 `~= false` rather than truthiness, specifically so they default to "on" for existing profiles
@@ -57,7 +57,11 @@ out to never actually work (confirmed live: always fell back to Low/Medium/High)
 unconditionally secret for the player's own query throughout this project's history. v1.2.1
 replaced it again, with a signed *tier* difference (0-3 scale, via the separately-reliable
 `UnitThreatSituation`) instead of a true point gap (§13 v1.2.1) — the text-based v1.1.0/v1.1.1
-version and the raw-point v1.2.0 version no longer exist.
+version and the raw-point v1.2.0 version no longer exist. v1.2.2 fixed a live crash where the
+Differential branch's own `CollectThreatRows` call could taint the execution and then throw
+inside the *fallback* it fell through to — `GetThreatOwnerPrefix` is now computed once in
+`ApplyThreatSingle` and passed down, rather than each function calling it independently (§13
+v1.2.2).
 
 **What ThreatMeterNP does today**, on every enemy/hostile nameplate:
 - **Target of target**: shows who the nameplate's unit is currently targeting (`T: Name`),
@@ -1209,6 +1213,38 @@ or API call needed — simpler than v1.2.0's version, not just more likely to ac
 Coarser than a true point gap (range is only -3..+3), but it's a real number that will actually
 display, which v1.2.0 never did. `RenderDebugPreview` updated to match (`topMember.status -
 second.status`, using the fake roster's already-rolled `status` field instead of `raw`).
+
+### v1.2.2: fix — Threat Differential could still throw, via a new cross-function taint path
+
+Reported live error, same signature as the v1.0.2 bug: `ThreatMeterNP.lua:102: attempt to
+perform boolean test on a secret boolean value (execution tainted by 'ThreatMeterNP')`, inside
+`GetThreatOwnerPrefix`'s `UnitIsUnit` check again — despite v1.0.2 having already fixed every
+known case of this within a single function, and v1.2.1 not touching `GetThreatOwnerPrefix` at
+all.
+
+**Root cause, a new variant of the same class of bug**: `ApplyThreatSingle` calls
+`ApplyExactThreatPercentage` first, then falls through to `ApplyThreatLevelFallback` if that
+returns `false`. With Threat Differential selected, `ApplyExactThreatPercentage`'s `format == 4`
+branch calls `CollectThreatRows` — which touches secret values internally (its own
+`UnitDetailedThreatSituation` phase) — and can *still* return `false` afterward (e.g. the player
+not found in `rows` at all). When that happens, `ApplyThreatSingle` moves on to
+`ApplyThreatLevelFallback`, which calls `GetThreatOwnerPrefix` as *its own* first action — a
+`UnitIsUnit` check that, by this point, is running in an execution already tainted by the
+earlier `CollectThreatRows` call, and throws. Each function's own internal ordering (prefix
+before any secret-returning call) was still individually correct — v1.0.2's fix was never wrong
+— but that fix only accounted for ordering *within* one function, not taint carrying across a
+sequence of separate function calls within the same chain.
+
+**Fix**: stopped treating `GetThreatOwnerPrefix` as something each function calls for itself.
+`ApplyThreatSingle` now calls it exactly once, before dispatching to either
+`ApplyExactThreatPercentage` or `ApplyThreatLevelFallback`, and passes the result down as a
+`prefix` parameter to both — neither function calls `GetThreatOwnerPrefix` internally anymore.
+This guarantees the one `UnitIsUnit`-based check in this whole chain always runs before any
+secret-returning call, regardless of which display format is active or which fallback ends up
+firing. General lesson for any future fallback chain touching secret-prone APIs: a "do the
+plain checks first" ordering fix has to account for every function that *might* run later in
+the same chain, not just the one function being edited — see infos.md for the full taint
+propagation writeup this extends.
 
 ### Investigated: EllesmereUI's own threat module does real arithmetic on `raw` — open follow-up
 
