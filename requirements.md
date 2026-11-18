@@ -1210,6 +1210,28 @@ Coarser than a true point gap (range is only -3..+3), but it's a real number tha
 display, which v1.2.0 never did. `RenderDebugPreview` updated to match (`topMember.status -
 second.status`, using the fake roster's already-rolled `status` field instead of `raw`).
 
+### Investigated: EllesmereUI's own threat module does real arithmetic on `raw` — open follow-up
+
+Read `EllesmereUIForeverEssentials_ThreatData.lua`/`_ThreatMeter.lua` in full (not just the one
+comment line cited earlier) at the user's request, to understand how a real, currently-working
+addon on this exact client handles threat ranking. Full writeup in
+[infos.md](infos.md) "EllesmereUI's actual threat module, read directly." Short version: it
+does genuine division/multiplication directly on `rawThreat` (bar sizing, the "pull line," the
+sort itself) for any unit whose value happens to be `Readable()` at collection time, skipping
+units whose values aren't — no sink-technique workaround anywhere in its threat code, because by
+the time it renders, nothing left in its data is secret. Its own header comment states Forever
+sets `C_Secrets.ShouldUnitThreatValuesBeSecret` to `false` generally.
+
+This directly contradicts ThreatMeterNP's own repeated finding that the player's own `rawThreat`
+is unconditionally secret (the root cause of this v1.2.1 entry above). Likely explanation: that
+finding was scoped to whatever specific circumstances it was tested in (an instance, a specific
+pull), not a true client-wide wall. **Not yet re-tested**: whether ThreatMeterNP's own
+`UnitDetailedThreatSituation("player", unitToken)` call comes back readable in a plain
+open-world solo pull specifically. If it does, the v1.2.0-style raw-threat differential
+(reverted here for always failing) may be worth retrying rather than treating the status-tier
+approximation as permanent — it would mean the real constraint is narrower (specific restricted
+content) than previously concluded, not absent arithmetic capability on this client in general.
+
 ### Default values (v2 base defaults, not SavedVariables)
 
 Set directly in `Options.lua`'s `defaults` table — these are what a fresh install (or a wiped

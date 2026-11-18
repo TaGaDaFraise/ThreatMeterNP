@@ -450,6 +450,62 @@ point gap). This is the original "threat gap" concept from this project's very f
 concept/scope sections (§4, §10 in requirements.md), which is still, ultimately, not achievable
 as a true point value on this client — only approximable via status tiers.
 
+### EllesmereUI's actual threat module, read directly (not just inferred from one comment)
+
+Previous entries in this file leaned on a single line glimpsed in
+`EllesmereUIForeverEssentials_ThreatData.lua`'s header comment. Read the whole module properly
+this time — `EllesmereUIForeverEssentials_ThreatData.lua` (collection/ranking, 176 lines) and the
+relevant half of `EllesmereUIForeverEssentials_ThreatMeter.lua` (rendering, ~1667 lines total,
+`PaintRow` around line 762-877) — both installed locally at
+`D:\World of Warcraft\_forever_\Interface\AddOns\EllesmereUIForeverEssentials\`.
+
+**How it works**:
+- **Collection** (`ns.NewCollector().Add`, `ThreatData.lua:100-113`): once per update, loops every
+  raid/party unit token (and pets, via a `PET_OWNER` map so a pet's row borrows its owner's
+  class) and calls `UnitDetailedThreatSituation(unit, mob)` on each. Any unit whose `raw`/
+  `scaled`/`tanking` isn't `Readable()` (`not issecretvalue(v) and v ~= nil`, same guard this
+  addon uses) **is skipped entirely** — not displayed, not ranked, no fallback attempted for
+  that unit this pass. Units that pass are stored as plain Lua table entries.
+- **Ranking** (`ns.ByThreat`, `ThreatData.lua:169-172`): `table.sort(list, function(a, b) if
+  a.raw ~= b.raw then return a.raw > b.raw end return a.order < b.order end)` — a genuine numeric
+  sort directly on `raw`, not a coarse status bucket. Only possible because anything that failed
+  the readability check in the collection step was already discarded before sorting runs, so
+  `a.raw`/`b.raw` are guaranteed plain numbers by the time the comparator touches them.
+- **Rendering** (`PaintRow`, `ThreatMeter.lua:762-877`): does real arithmetic on the stored
+  values, not sink-only display — e.g. line 853: `local fillValue = top > 0 and e.raw * 100 /
+  top or 0` to size each row's bar relative to the single highest entry on screen. Also computes
+  `rawPct` (percent of the tank's threat) and a synthetic "pull line" row
+  (`ns.FillPullEntry`, `ThreatData.lua:159-166`: `raw = me.raw * 100 / me.scaled`, "where you'd
+  pull aggro if not already tanking") — both plain multiplication/division on `raw`/`scaled`.
+  `SetFormattedText`/`SetText` only enter the picture afterward, to put an already-computed plain
+  number on screen (`ThreatMeter.lua:868-872`) — not used as a secrecy workaround here at all,
+  since by this point there's nothing secret left to work around.
+
+**The part that matters for ThreatMeterNP**: `ThreatData.lua`'s own header comment states outright
+(lines 8-10): *"Forever hands the threat API over readable (`C_Secrets.ShouldUnitThreatValuesBeSecret`
+is false there); a value that does come back secret skips that unit."* `ShouldUnitThreatValuesBeSecret`
+is confirmed as a real Blizzard predicate (`SecretPredicateAPIDocumentation.lua`), not an
+EllesmereUI invention, and the code backs the claim up — it does real division/multiplication
+directly on `raw` with no sink technique anywhere in the collection/ranking/pull-line path.
+
+**This contradicts this addon's own repeated "rawThreat is unconditionally secret for the
+player's own query" finding** (the root cause behind the v1.2.0 Threat Differential failure,
+"Exercised for real arithmetic..." above). EllesmereUI is a real, currently-installed, working
+addon on this exact client proving per-unit threat arithmetic is *not* inherently blocked on
+Forever in general. That means ThreatMeterNP's "unconditional" conclusion was very likely
+**scoped to whatever specific circumstances it happened to be tested in** (open world vs.
+instance, specific encounter, something else about that session), not a hard client-wide wall —
+`SecretWhenUnitThreatValuesRestricted`'s own doc text already hedges with "in some restricted
+content," which this reopens as a live possibility rather than something to dismiss.
+
+**Not yet done**: re-test ThreatMeterNP's own `UnitDetailedThreatSituation("player", unitToken)`
+call specifically in a plain open-world solo pull (the exact condition EllesmereUI's collector
+assumes works) to see whether `rawThreat`/`scaledPercentage` actually come back readable there
+too. If they do, the v1.2.0-style raw-threat subtraction (reverted in v1.2.1 for always
+failing) may be worth retrying rather than permanently abandoned — the status-tier approximation
+currently shipped would then be a workaround for a narrower problem (specific restricted
+content) rather than a permanent ceiling.
+
 ### ElvUI's threat meter — confirms the fallback approach, not a new capability
 
 `ElvUI\Game\Shared\Modules\Nameplates\Elements\Threat.lua` doesn't fetch threat data itself —
